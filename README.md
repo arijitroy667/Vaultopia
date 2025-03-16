@@ -1,9 +1,11 @@
-**🏦 Vaultopia – ERC-4626 DeFi Vault for USDC******
+****🏦 Vaultopia – ERC-4626 DeFi Vault for USDC************
+
 
 
 Vaultopia is a decentralized ERC-4626 vault designed to optimize yield on USDC deposits.
 
 Built on Ethereum, it enables users to deposit USDC, receive vault shares, and earn passive income through automated yield strategies.
+
 
 **🔹 Key Features**
 
@@ -18,6 +20,7 @@ Built on Ethereum, it enables users to deposit USDC, receive vault shares, and e
 
 ⚡ Optimized Yield Strategies – Integrated with top DeFi protocols for efficient capital allocation.
 
+
 **📜 Contract Details**
 
 Network: Ethereum (EVM-compatible)
@@ -27,6 +30,7 @@ Vault Token: USDC
 Vault Standard: ERC-4626
 
 Contract Address: [Add contract address here]
+
 
 **📥 How It Works**
 
@@ -38,6 +42,7 @@ Contract Address: [Add contract address here]
 
 4️⃣ Withdraw Anytime → Users can redeem their shares for USDC + yield.
 
+
 **🔧 Deployment & Development**
 
 To deploy the contract:
@@ -48,6 +53,7 @@ Copy code
 npm install
 
 npx hardhat run scripts/deploy.js --network ethereum
+
 
 **🤝 Contributing**
 
