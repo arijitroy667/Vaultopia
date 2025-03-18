@@ -9,7 +9,7 @@ import "./ICurvePool.sol";
 import "./Vault.sol";
 
 contract LiquidityProvisionStrategy is Ownable, ReentrancyGuard {
-    IVault public vault;
+    Yield_Bull public vault;
     IERC20 public usdc;
 
     // Pool configurations
@@ -31,7 +31,7 @@ contract LiquidityProvisionStrategy is Ownable, ReentrancyGuard {
         address _uniswapPool,
         address _curvePool
     ) {
-        vault = IVault(_vault);
+        vault = Yield_Bull(_vault);
         usdc = IERC20(_usdc);
         uniswapV3Pool = _uniswapPool;
         curvePool = _curvePool;
