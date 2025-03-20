@@ -10,7 +10,7 @@ import {
   import { custom } from 'viem';
   import vaultProvider from './web3Provider';
   import { ethers } from "ethers";
-
+  import {requestResult } from './Lido_Withdraw';
 // Set up your providers
 const rpcProvider = createPublicClient({
   chain: holesky,
@@ -30,11 +30,9 @@ const lidoSDK = new LidoSDK({
   web3Provider: walletClient,
 });
 
+
 const callback: TransactionCallback = ({ stage, payload }) => {
     switch (stage) {
-      case TransactionCallbackStage.PERMIT:
-        console.log('wait for permit');
-        break;
       case TransactionCallbackStage.GAS_LIMIT:
         console.log('wait for gas limit');
         break;
@@ -53,10 +51,6 @@ const callback: TransactionCallback = ({ stage, payload }) => {
         console.log('done');
         console.log(payload, 'transaction confirmations');
         break;
-      case TransactionCallbackStage.MULTISIG_DONE:
-        console.log('multisig_done');
-        console.log(payload, 'transaction confirmations');
-        break;
       case TransactionCallbackStage.ERROR:
         console.log('error');
         console.log(payload, 'error object with code and message');
@@ -64,27 +58,23 @@ const callback: TransactionCallback = ({ stage, payload }) => {
       default:
     }
   };
- 
-  async function withdrawWithLido() {
+
+async function claimWithLido(){
   try {
-    const requestTx = await lidoSDK.withdrawals.request.requestWithPermit({
-      requests,
-      token, // 'stETH' | 'wstETH'
+    const claimTx = await lidoSDK.withdrawals.claim.claimRequests({
+      requestResult,
       callback,
-      account,
     });
   
     console.log(
+      claimTx,
       'transaction hash, transaction receipt, confirmations',
-      requestResult,
-      'array of requests(nfts) created with ids, amounts,creator, owner',
-      request.results.requests,
+      claim.result.requests,
+      'array of claimed requests, with amounts of ETH claimed',
     );
   } catch (error) {
     console.log((error as SDKError).errorMessage, (error as SDKError).code);
   }
 }
 
-withdrawWithLido();
-
-export default {requestResult, request.results.requests}
+claimWithLido();

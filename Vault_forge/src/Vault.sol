@@ -13,6 +13,7 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 contract Yield_Bull is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
+    address public swapContract = "0x0000";
 
     // Events
     event Deposit(
@@ -330,5 +331,14 @@ contract Yield_Bull is ReentrancyGuard {
      */
     function balanceOf(address owner) public view returns (uint256) {
         return balances[owner];
+    }
+
+    function setSwapContract(address _swapContract) external {
+        swapContract = _swapContract;
+    }
+
+    function transferUSDCToSwap(uint256 amount) external {
+        require(swapContract != address(0), "Swap contract not set");
+        require(USDC.transfer(swapContract, amount), "USDC Transfer failed");
     }
 }
