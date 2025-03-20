@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
+    "@lidofinance/lido-ethereum-sdk": "^4.3.0",
     "@metamask/providers": "^20.0.0",
     "@metamask/sdk": "^0.32.1",
     "@radix-ui/react-accordion": "^1.2.2",
@@ -60,6 +61,7 @@
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^0.9.6",
+    "viem": "^2.23.13",
     "zod": "^3.24.1"
   },
   "devDependencies": {
