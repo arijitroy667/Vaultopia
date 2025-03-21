@@ -13,7 +13,7 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 contract Yield_Bull is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
-    address public swapContract = "0x0000";
+    address public swapContract;
 
     // Events
     event Deposit(
@@ -33,7 +33,7 @@ contract Yield_Bull is ReentrancyGuard {
     // State variables
     address public immutable ASSET_TOKEN_ADDRESS =
         0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
-    uint256 public constant MAX_DEPOSIT_PER_USER = 499 * 1e6;
+    uint256 public constant MAX_DEPOSIT_PER_USER = 4999 * 1e6;
 
     mapping(address => uint256) public userDeposits;
     mapping(address => uint256) public balances;
