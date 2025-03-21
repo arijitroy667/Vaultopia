@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import 'dotenv/config';
 
-const ALCHEMY_URL = 'https://eth-holesky.g.alchemy.com/v2/NZ1c4Vu21IOmBWCLeIe2oVMFLgLbfMLs';
+const ALCHEMY_URL = process.env.ALCHEMY_URL || 'YOUR_ALCHEMY_URL';
 const HOLESKY_CHAIN_ID = '0x4268'; // 17000 in hex for Holesky
 
 // Initialize provider
