@@ -30,6 +30,7 @@ contract SwapContract {
     // Events for logging
     event SwappedUSDCForETH(uint256 usdcAmount, uint256 ethAmount);
     event SwappedETHForUSDC(uint256 ethAmount, uint256 usdcAmount);
+    event SwapFailed(uint256 usdcAmount, string reason);
 
     constructor(
         address _swapRouter,
@@ -57,10 +58,17 @@ contract SwapContract {
      * @return amountOut The amount of ETH sent to the receiver
      */
     // New function in Swap contract that swaps ALL USDC (not just 40%)
-    function swapAllUSDCForETH(
+    function takeAndSwapUSDC(
+        uint256 amount,
         uint256 amountOutMin
     ) external returns (uint256 amountOut) {
         require(msg.sender == vaultContract, "Only vault can call");
+
+        // Transfer USDC from vault to this contract
+        require(
+            USDC.transferFrom(vaultContract, address(this), amount),
+            "USDC transfer failed"
+        );
 
         uint256 usdcBalance = USDC.balanceOf(address(this));
         require(usdcBalance > 0, "No USDC to swap");
@@ -68,30 +76,52 @@ contract SwapContract {
         // Approve Uniswap to spend ALL USDC
         USDC.approve(address(swapRouter), usdcBalance);
 
-        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
-            .ExactInputSingleParams({
-                tokenIn: address(USDC),
-                tokenOut: address(WETH),
-                fee: poolFee,
-                recipient: address(this),
-                deadline: block.timestamp + 300,
-                amountIn: usdcBalance, // Use ENTIRE balance
-                amountOutMinimum: amountOutMin,
-                sqrtPriceLimitX96: 0
-            });
+        try
+            swapRouter.exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: address(USDC),
+                    tokenOut: address(WETH),
+                    fee: poolFee,
+                    recipient: address(this),
+                    deadline: block.timestamp + 300,
+                    amountIn: usdcBalance,
+                    amountOutMinimum: amountOutMin,
+                    sqrtPriceLimitX96: 0
+                })
+            )
+        returns (uint256 _amountOut) {
+            amountOut = _amountOut;
 
-        // Swap USDC for WETH
-        amountOut = swapRouter.exactInputSingle(params);
+            // Convert WETH to ETH
+            WETH.withdraw(amountOut);
 
-        // Convert WETH to ETH
-        WETH.withdraw(amountOut);
+            // Send ETH to Receiver Contract
+            (bool success, ) = payable(receiverContract).call{value: amountOut}(
+                ""
+            );
+            require(success, "ETH transfer failed");
 
-        // Send ETH to Receiver Contract
-        (bool success, ) = payable(receiverContract).call{value: amountOut}("");
-        require(success, "ETH transfer failed");
+            emit SwappedUSDCForETH(usdcBalance, amountOut);
+            return amountOut;
+        } catch Error(string memory reason) {
+            // Reset the approval
+            USDC.approve(address(swapRouter), 0);
 
-        emit SwappedUSDCForETH(usdcBalance, amountOut);
-        return amountOut;
+            // Send USDC back to vault
+            USDC.transfer(vaultContract, usdcBalance);
+
+            emit SwapFailed(usdcBalance, reason);
+            revert(reason);
+        }
+    }
+
+    // In your Swap contract
+    function recoverUSDC() external {
+        require(msg.sender == vaultContract, "Only vault can call");
+        uint256 usdcBalance = USDC.balanceOf(address(this));
+        if (usdcBalance > 0) {
+            USDC.transfer(vaultContract, usdcBalance);
+        }
     }
 
     /**

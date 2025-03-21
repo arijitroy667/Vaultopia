@@ -1,60 +1,49 @@
-import { createPublicClient, createWalletClient, http, Address, PublicClient, encodeFunctionData } from 'viem';
-import { holesky } from 'viem/chains';
-import { custom } from 'viem';
+import { ethers } from 'ethers';
+import 'dotenv/config';
 
+const ALCHEMY_URL = 'https://eth-holesky.g.alchemy.com/v2/NZ1c4Vu21IOmBWCLeIe2oVMFLgLbfMLs';
+const HOLESKY_CHAIN_ID = '0x4268'; // 17000 in hex for Holesky
 
-// Define your vault ABI type
-import { VAULT_ABI } from './vault-abi'; // Import or define your ABI
+// Initialize provider
+const provider = new ethers.JsonRpcProvider(ALCHEMY_URL);
 
-// Your vault contract address
-const VAULT_CONTRACT_ADDRESS = '0x0' as Address; // Replace with your vault address
+// Initialize wallet with private key
+// IMPORTANT: Store this securely, preferably in environment variables
+const PRIVATE_KEY = process.env.PRIVATE_KEY || 'YOUR_PRIVATE_KEY';
+const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Create a custom provider that delegates transaction signing to your vault contract
-const createVaultProvider = (vaultAddress: Address, publicClient: PublicClient) => {
-  // This is a simplified implementation - you'll need to adjust based on your vault's interface
-  return {
-    request: async ({ method, params }: { method: string; params: any[] }) => {
-      // For read operations, use the public client
-      if (method === 'eth_call' || method === 'eth_getBalance' || method === 'eth_getTransactionCount') {
-        return publicClient.request({ method, params });
+const Web3Provider = {
+  request: async ({ method, params }: { method: string; params: any[] }) => {
+    try {
+      switch (method) {
+        case 'eth_accounts':
+          return [await signer.getAddress()];
+          
+        case 'eth_chainId':
+          return HOLESKY_CHAIN_ID;
+          
+        case 'eth_sendTransaction':
+          const tx = await signer.sendTransaction(params[0]);
+          await tx.wait(); // Wait for confirmation
+          return tx.hash;
+          
+        case 'eth_sign':
+          return await signer.signMessage(ethers.getBytes(params[1]));
+          
+        case 'eth_estimateGas':
+          return await provider.estimateGas(params[0]);
+          
+        case 'eth_getBalance':
+          return await provider.getBalance(params[0]);
+          
+        default:
+          return await provider.send(method, params);
       }
-      
-      // For transaction signing, delegate to your vault contract
-      if (method === 'eth_sendTransaction') {
-        const txParams = params[0];
-        
-        // Create a transaction to call your vault's signing function
-        const vaultTx = await publicClient.prepareTransactionRequest({
-          to: vaultAddress,
-          data: encodeFunctionData({
-            abi: VAULT_ABI, // Your vault contract ABI
-            functionName: 'executeTransaction', // Your vault function that handles transactions
-            args: [txParams.to, txParams.value || 0, txParams.data]
-          }),
-          // Other parameters as needed
-        });
-        
-        // Execute the vault transaction
-        return publicClient.request({
-          method: 'eth_sendTransaction',
-          params: [vaultTx]
-        });
-      }
-      
-      // Handle other methods as needed
-      throw new Error(`Method ${method} not implemented in vault provider`);
+    } catch (error) {
+      console.error(`Error in Web3Provider for method ${method}:`, error);
+      throw error;
     }
-  };
+  }
 };
 
-
-// Set up your providers
-const rpcProvider = createPublicClient({
-    chain: holesky,
-    transport: http("https://eth-holesky.g.alchemy.com/v2/NZ1c4Vu21IOmBWCLeIe2oVMFLgLbfMLs"),
-  });
-
-
-const vaultProvider = createVaultProvider(VAULT_CONTRACT_ADDRESS, rpcProvider);
-
-export default vaultProvider;
+export default Web3Provider;
