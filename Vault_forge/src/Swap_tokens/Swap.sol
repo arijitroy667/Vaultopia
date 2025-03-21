@@ -56,7 +56,8 @@ contract SwapContract {
      * @param amountOutMin Minimum amount of ETH expected from the swap
      * @return amountOut The amount of ETH sent to the receiver
      */
-    function swapUSDCForETH(
+    // New function in Swap contract that swaps ALL USDC (not just 40%)
+    function swapAllUSDCForETH(
         uint256 amountOutMin
     ) external returns (uint256 amountOut) {
         require(msg.sender == vaultContract, "Only vault can call");
@@ -64,12 +65,8 @@ contract SwapContract {
         uint256 usdcBalance = USDC.balanceOf(address(this));
         require(usdcBalance > 0, "No USDC to swap");
 
-        // Calculate 40% of the USDC balance
-        uint256 amountToSwap = (usdcBalance * 40) / 100;
-        require(amountToSwap > 0, "Swap amount too small");
-
-        // Approve Uniswap to spend USDC
-        USDC.approve(address(swapRouter), amountToSwap);
+        // Approve Uniswap to spend ALL USDC
+        USDC.approve(address(swapRouter), usdcBalance);
 
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
             .ExactInputSingleParams({
@@ -78,7 +75,7 @@ contract SwapContract {
                 fee: poolFee,
                 recipient: address(this),
                 deadline: block.timestamp + 300,
-                amountIn: amountToSwap, // Use 40% of balance instead of full balance
+                amountIn: usdcBalance, // Use ENTIRE balance
                 amountOutMinimum: amountOutMin,
                 sqrtPriceLimitX96: 0
             });
@@ -93,7 +90,7 @@ contract SwapContract {
         (bool success, ) = payable(receiverContract).call{value: amountOut}("");
         require(success, "ETH transfer failed");
 
-        emit SwappedUSDCForETH(amountToSwap, amountOut);
+        emit SwappedUSDCForETH(usdcBalance, amountOut);
         return amountOut;
     }
 

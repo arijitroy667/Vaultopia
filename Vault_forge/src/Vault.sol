@@ -337,8 +337,23 @@ contract Yield_Bull is ReentrancyGuard {
         swapContract = _swapContract;
     }
 
-    function transferUSDCToSwap(uint256 amount) external {
-        require(swapContract != address(0), "Swap contract not set");
-        require(USDC.transfer(swapContract, amount), "USDC Transfer failed");
+    // In your Vault contract
+function transferAndSwapUSDC(uint256 amountOutMin) external returns (uint256) {
+    require(swapContract != address(0), "Swap contract not set");
+    
+    // Calculate 40% of the vault's USDC balance
+    uint256 usdcBalance = USDC.balanceOf(address(this));
+    uint256 amountToTransfer = (usdcBalance * 40) / 100;
+    require(amountToTransfer > 0, "Amount too small");
+    
+    // Transfer exactly 40% of the USDC to the Swap contract
+    require(USDC.transfer(swapContract, amountToTransfer), "USDC Transfer failed");
+    
+    // Call the swap function to swap ALL of the transferred USDC
+    interface ISwapContract {
+        function swapAllUSDCForETH(uint256 amountOutMin) external returns (uint256);
     }
+    
+    return ISwapContract(swapContract).swapAllUSDCForETH(amountOutMin);
+}
 }
