@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+import "./ISwapRouter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IWETH {
@@ -13,6 +13,8 @@ interface IWETH {
         address recipient,
         uint256 amount
     ) external returns (bool);
+
+    function approve(address spender, uint256 amount) external returns (bool);
 
     function balanceOf(address account) external view returns (uint256);
 }

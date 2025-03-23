@@ -3,3 +3,6 @@ erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/
 forge-std/=lib/forge-std/src/
 halmos-cheatcodes/=lib/openzeppelin-contracts/lib/halmos-cheatcodes/src/
 openzeppelin-contracts/=lib/openzeppelin-contracts/
+@uniswap/v3-periphery/=node_modules/@uniswap/v3-periphery/
+@uniswap/v3-core/=node_modules/@uniswap/v3-core/
+@openzeppelin/=node_modules/@openzeppelin/
