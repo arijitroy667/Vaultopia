@@ -75,7 +75,7 @@ const callback: TransactionCallback = ({ stage, payload }) => {
 // Function to stake ETH directly with Lido
 async function stakeWithLido(amount: bigint) {
   try {
-    console.log(`Staking ${ethers.utils.formatEther(amount.toString())} ETH with Lido...`);
+    console.log(`Staking ${ethers.formatEther(amount.toString())} ETH with Lido...`);
     
     const wrapTx = await lidoSDK.staking.wrapETH({
       value: amount,
@@ -123,7 +123,7 @@ async function triggerReceiverStaking() {
 // Function to withdraw stETH from Lido
 async function withdrawFromLido(stethAmount: bigint) {
   try {
-    console.log(`Requesting withdrawal of ${ethers.utils.formatEther(stethAmount.toString())} stETH...`);
+    console.log(`Requesting withdrawal of ${ethers.formatEther(stethAmount.toString())} stETH...`);
     
     const withdrawalTx = await lidoSDK.withdrawal.request({
       amount: stethAmount,

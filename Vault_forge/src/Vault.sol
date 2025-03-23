@@ -14,6 +14,12 @@ contract Yield_Bull is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
     address public swapContract;
+    uint256 public lastUpdateTime;
+    address public feeCollector;
+    bool public emergencyShutdown;
+    bool public depositsPaused;
+    address public owner;
+    address[] private userAddresses;
 
     // Events
     event Deposit(
@@ -29,17 +35,31 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 assets,
         uint256 shares
     );
+    event LockedAssetsUpdated(address indexed user, uint256 amount);
+    event WithdrawalRequested(address indexed user, uint256 amount, uint256 unlockTime);
+    event StakedPortionLocked(address indexed user, uint256 amount, uint256 unlockTime);
+    event SwapInitiated(uint256 amount, uint256 minAmountOut);
+    event EmergencyShutdownToggled(bool enabled);
+    event FeeCollectorUpdated(address indexed newFeeCollector);
 
     // State variables
     address public immutable ASSET_TOKEN_ADDRESS =
         0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
     uint256 public constant MAX_DEPOSIT_PER_USER = 4999 * 1e6;
-
+    uint256 public constant TIMELOCK_DURATION = 2 days;
+    mapping(bytes32 => uint256) public pendingOperations;
+    mapping(address => uint256) public stakedPortions; // Track 40% staked amount per user
     mapping(address => uint256) public userDeposits;
     mapping(address => uint256) public balances;
+    mapping(address => uint256) public depositTimestamps;
+    mapping(address => uint256) public lockedAssets;
+    mapping(address => bool) private isExistingUser;
 
     uint256 public totalAssets; // Total assets in the vault
     uint256 public totalShares; // Total shares issued by the vault
+
+    uint256 public constant LOCK_PERIOD = 30 days;
+    uint256 public constant INSTANT_WITHDRAWAL_LIMIT = 60;
 
     IERC20 public immutable asset;
     uint8 private immutable _decimals;
@@ -47,6 +67,7 @@ contract Yield_Bull is ReentrancyGuard {
     constructor() {
         asset = IERC20(ASSET_TOKEN_ADDRESS);
         _decimals = IERC20Metadata(ASSET_TOKEN_ADDRESS).decimals();
+         owner = msg.sender;
     }
 
     /**
@@ -60,6 +81,9 @@ contract Yield_Bull is ReentrancyGuard {
         return (totalAssets * 1e18) / totalShares;
     }
 
+    function queueOperation(bytes32 operationId) internal {
+        pendingOperations[operationId] = block.timestamp + TIMELOCK_DURATION;
+    }
     /**
      * @dev Converts a given amount of assets to shares
      * @param assets The amount of assets to convert
@@ -132,18 +156,36 @@ contract Yield_Bull is ReentrancyGuard {
 
         shares = previewDeposit(assets);
         require(shares > 0, "Zero shares minted");
+        
+         if (!isExistingUser[receiver]) {
+            userAddresses.push(receiver);
+            isExistingUser[receiver] = true;
+        }
+
+        // Calculate and track staked portion (40%)
+        uint256 stakedPortion = (assets * 40) / 100;
+        stakedPortions[receiver] += stakedPortion;
 
         // Update state
         userDeposits[receiver] += assets;
         balances[receiver] += shares;
         totalAssets += assets;
         totalShares += shares;
+        depositTimestamps[receiver] = block.timestamp;
+        lockedAssets[receiver] += stakedPortion; // Only lock the staked portion
+
 
         // Transfer assets from user to vault
         asset.safeTransferFrom(msg.sender, address(this), assets);
 
         emit Deposit(msg.sender, receiver, assets, shares);
+        emit LockedAssetsUpdated(receiver, lockedAssets[receiver]);
         return shares;
+    }
+
+    function toggleDeposits() external {
+        require(msg.sender == owner, "Not authorized");
+        depositsPaused = !depositsPaused;
     }
 
     /**
@@ -203,7 +245,11 @@ contract Yield_Bull is ReentrancyGuard {
     function maxWithdraw(
         address owner
     ) public view returns (uint256 maxAssets) {
-        return convertToAssets(balanceOf(owner));
+        uint256 totalAssets = convertToAssets(balances[owner]);
+        if (block.timestamp < depositTimestamps[owner] + LOCK_PERIOD) {
+            return (totalAssets * INSTANT_WITHDRAWAL_LIMIT) / 100;
+        }
+        return totalAssets;
     }
 
     /**
@@ -233,9 +279,28 @@ contract Yield_Bull is ReentrancyGuard {
     ) public nonReentrant returns (uint256 shares) {
         require(assets > 0, "Assets must be greater than zero");
         require(receiver != address(0), "Invalid receiver");
+        require(!emergencyShutdown || msg.sender == owner, "Withdrawals suspended");
+
+        // Calculate available assets
+        uint256 stakedAmount = stakedPortions[owner];
+        uint256 depositTime = depositTimestamps[owner];
+        bool isLocked = block.timestamp < depositTime + LOCK_PERIOD;
+        
+        if (isLocked) {
+        // During lock period, only allow withdrawal of unstaked portion
+        uint256 availableBalance = convertToAssets(balances[owner]) - stakedAmount;
+        require(assets <= availableBalance, "Cannot withdraw staked portion during lock period");
+        }
 
         shares = previewWithdraw(assets);
-        require(shares > 0, "Shares must be greater than zero");
+        require(shares <= balances[owner], "Insufficient shares");
+
+        // Update locked assets
+        if (isLocked) {
+            require(lockedAmount >= assets, "Exceeds unlocked amount");
+            lockedAssets[owner] -= assets;
+            emit LockedAssetsUpdated(owner, lockedAssets[owner]);
+        }
 
         // Verify authorization
         if (msg.sender != owner) {
@@ -249,6 +314,11 @@ contract Yield_Bull is ReentrancyGuard {
         balances[owner] -= shares;
         totalShares -= shares;
         totalAssets -= assets;
+
+        if (!isLocked) {
+            // Reset staked portion after lock period
+            stakedPortions[owner] = 0;
+        }
 
         // Transfer assets from vault to receiver
         asset.safeTransfer(receiver, assets);
@@ -334,18 +404,25 @@ contract Yield_Bull is ReentrancyGuard {
     }
 
     function setSwapContract(address _swapContract) external {
+        require(msg.sender == owner, "Not authorized"); // Add this line
+        require(_swapContract != address(0), "Invalid address"); // Add this line
         swapContract = _swapContract;
     }
 
     // In your Vault contract
 function safeTransferAndSwap(uint256 amountOutMin) external returns (uint256) {
     require(swapContract != address(0), "Swap contract not set");
-    
+    require(msg.sender == owner || msg.sender == address(this), "Unauthorized");
+    require(amountOutMin > 0, "Slippage protection: minimum output amount must be set");
     // Calculate 40% of the vault's USDC balance
     uint256 usdcBalance = USDC.balanceOf(address(this));
-    uint256 amountToTransfer = (usdcBalance * 40) / 100;
-    require(amountToTransfer > 0, "Amount too small");
+    uint256 availableForSwap = (usdcBalance * 40) / 100;
+    require(availableForSwap > 0, "Amount too small");
     
+    // Ensure we're not touching locked assets
+    uint256 totalLockedAssets = getTotalLockedAssets();
+    require(usdcBalance - availableForSwap >= totalLockedAssets, "Would affect locked assets");
+     uint256 amountToTransfer = availableForSwap;
     // First approve the swap contract to take the USDC directly
     USDC.approve(swapContract, amountToTransfer);
     
@@ -355,11 +432,76 @@ function safeTransferAndSwap(uint256 amountOutMin) external returns (uint256) {
     }
     
     uint256 result = ISwapContract(swapContract).takeAndSwapUSDC(amountToTransfer, amountOutMin);
-    
+    emit SwapInitiated(amountToTransfer, amountOutMin);
     // Reset approval to zero after swap is complete
     USDC.approve(swapContract, 0);
     
     return result;
 }
+
+    function getUnlockTime(address user) public view returns (uint256) {
+        uint256 depositTime = depositTimstamps[user];
+        if (depositTime == 0) return 0;
+        return depositTime + LOCK_PERIOD;
+    }
+
+    function getWithdrawableAmount(address user) public view returns (uint256) {
+        uint256 totalBalance = convertToAssets(balances[user]);
+        if (block.timestamp >= depositTimestamps[user] + LOCK_PERIOD) {
+            return totalBalance;
+        }
+        return totalBalance - stakedPortions[user]; // Only unstaked portion
+    }
+
+    function getLockedAmount(address user) public view returns (uint256) {
+        if (block.timestamp >= depositTimestamps[user] + LOCK_PERIOD) {
+            return 0;
+        }
+        return stakedPortions[user]; // Return staked portion
+    }
+
+    function getTotalLockedAssets() internal view returns (uint256) {
+         uint256 totalStaked = 0;
+        for (uint256 i = 0; i < userAddresses.length; i++) {
+            address user = userAddresses[i];
+            if (block.timestamp < depositTimestamps[user] + LOCK_PERIOD) {
+                totalStaked += stakedPortions[user];
+            }
+        }
+        return totalStaked;
+    }
+
+    function updateLockedAssets() internal {
+        uint256 currentTime = block.timestamp;
+        if (currentTime >= lastUpdateTime + 1 days) {
+        // Update locked assets daily
+        _recalculateLockedAssets();
+        lastUpdateTime = currentTime;
+        }
+    }
+
+    function _recalculateLockedAssets() internal {
+    // Add implementation
+    for (uint256 i = 0; i < userAddresses.length; i++) {
+        address user = userAddresses[i];
+        if (block.timestamp >= depositTimestamps[user] + LOCK_PERIOD) {
+            stakedPortions[user] = 0;
+            lockedAssets[user] = 0;
+        }
+    }
+    }
+
+    function toggleEmergencyShutdown() external {
+        require(msg.sender == owner, "Not authorized");
+        emergencyShutdown = !emergencyShutdown;
+        emit EmergencyShutdownToggled(emergencyShutdown);
+    }
+
+    function setFeeCollector(address _feeCollector) external {
+        require(msg.sender == owner, "Not authorized");
+        require(_feeCollector != address(0), "Invalid address");
+        feeCollector = _feeCollector;
+        emit FeeCollectorUpdated(_feeCollector);
+    }
 
 }
