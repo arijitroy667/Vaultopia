@@ -6,10 +6,7 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
-/**
- * @title Yield_Bull
- * @dev An ERC4626-compliant vault implementation with deposit limits per user
- */
+
 contract Yield_Bull is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
@@ -20,7 +17,22 @@ contract Yield_Bull is ReentrancyGuard {
     bool public depositsPaused;
     address public owner;
     address[] private userAddresses;
-
+    address public immutable ASSET_TOKEN_ADDRESS =0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
+    uint256 public constant MAX_DEPOSIT_PER_USER = 4999 * 1e6;
+    uint256 public constant TIMELOCK_DURATION = 2 days;
+    uint256 public totalAssets; // Total assets in the vault
+    uint256 public totalShares; // Total shares issued by the vault
+    uint256 public constant LOCK_PERIOD = 30 days;
+    uint256 public constant INSTANT_WITHDRAWAL_LIMIT = 60;
+    IERC20 public immutable asset;
+    uint8 private immutable _decimals;
+    uint256 public totalAssets; // Total assets in the vault
+    uint256 public totalShares; // Total shares issued by the vault
+    uint256 public constant LOCK_PERIOD = 30 days;
+    uint256 public constant INSTANT_WITHDRAWAL_LIMIT = 60;
+    IERC20 public immutable asset;
+    uint8 private immutable _decimals;
+    
     // Events
     event Deposit(
         address indexed sender,
@@ -43,10 +55,7 @@ contract Yield_Bull is ReentrancyGuard {
     event FeeCollectorUpdated(address indexed newFeeCollector);
 
     // State variables
-    address public immutable ASSET_TOKEN_ADDRESS =
-        0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
-    uint256 public constant MAX_DEPOSIT_PER_USER = 4999 * 1e6;
-    uint256 public constant TIMELOCK_DURATION = 2 days;
+    
     mapping(bytes32 => uint256) public pendingOperations;
     mapping(address => uint256) public stakedPortions; // Track 40% staked amount per user
     mapping(address => uint256) public userDeposits;
@@ -55,25 +64,14 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => uint256) public lockedAssets;
     mapping(address => bool) private isExistingUser;
 
-    uint256 public totalAssets; // Total assets in the vault
-    uint256 public totalShares; // Total shares issued by the vault
-
-    uint256 public constant LOCK_PERIOD = 30 days;
-    uint256 public constant INSTANT_WITHDRAWAL_LIMIT = 60;
-
-    IERC20 public immutable asset;
-    uint8 private immutable _decimals;
-
+    
     constructor() {
         asset = IERC20(ASSET_TOKEN_ADDRESS);
         _decimals = IERC20Metadata(ASSET_TOKEN_ADDRESS).decimals();
          owner = msg.sender;
     }
 
-    /**
-     * @dev Returns the exchange rate between shares and assets
-     * @return The exchange rate (assets per share) multiplied by 1e18 for precision
-     */
+    
     function exchangeRate() public view returns (uint256) {
         if (totalShares == 0) {
             return 1e18; // Initial exchange rate: 1 share = 1 asset
@@ -84,42 +82,25 @@ contract Yield_Bull is ReentrancyGuard {
     function queueOperation(bytes32 operationId) internal {
         pendingOperations[operationId] = block.timestamp + TIMELOCK_DURATION;
     }
-    /**
-     * @dev Converts a given amount of assets to shares
-     * @param assets The amount of assets to convert
-     * @return shares The equivalent amount of shares
-     */
-    function convertToShares(
-        uint256 assets
-    ) public view returns (uint256 shares) {
+    
+    function convertToShares(uint256 assets) public view returns (uint256 shares) {
         if (totalAssets == 0 || totalShares == 0) {
             return assets; // Initial conversion: 1:1
         }
         return (assets * totalShares) / totalAssets;
     }
 
-    /**
-     * @dev Converts a given amount of shares to assets
-     * @param shares The amount of shares to convert
-     * @return assets The equivalent amount of assets
-     */
-    function convertToAssets(
-        uint256 shares
-    ) public view returns (uint256 assets) {
+    
+    function convertToAssets(uint256 shares) public view returns (uint256 assets) {
         if (totalShares == 0) {
             return shares; // Initial conversion: 1:1
         }
         return (shares * totalAssets) / totalShares;
     }
 
-    /**
-     * @dev Returns the maximum amount of assets that can be deposited by a specific receiver
-     * @param receiver The address that will receive the shares
-     * @return maxAssets The maximum amount of assets that can be deposited
-     */
-    function maxDeposit(
-        address receiver
-    ) public view returns (uint256 maxAssets) {
+    
+    
+    function maxDeposit(address receiver) public view returns (uint256 maxAssets) {
         uint256 deposited = userDeposits[receiver];
         return
             deposited >= MAX_DEPOSIT_PER_USER
@@ -127,28 +108,12 @@ contract Yield_Bull is ReentrancyGuard {
                 : MAX_DEPOSIT_PER_USER - deposited;
     }
 
-    /**
-     * @dev Previews the amount of shares that would be minted for a given deposit amount
-     * @param assets The amount of assets to deposit
-     * @return shares The amount of shares that would be minted
-     */
-    function previewDeposit(
-        uint256 assets
-    ) public view returns (uint256 shares) {
+    function previewDeposit(uint256 assets) public view returns (uint256 shares) {
         require(assets > 0, "Deposit amount must be greater than zero");
         return convertToShares(assets);
     }
 
-    /**
-     * @dev Deposits assets and mints shares to receiver
-     * @param assets The amount of assets to deposit
-     * @param receiver The address that will receive the shares
-     * @return shares The amount of shares minted
-     */
-    function deposit(
-        uint256 assets,
-        address receiver
-    ) public nonReentrant returns (uint256 shares) {
+    function deposit(uint256 assets,address receiver) public nonReentrant returns (uint256 shares) {
         require(assets > 0, "Deposit amount must be greater than zero");
 
         uint256 maxDepositable = maxDeposit(receiver);
@@ -188,36 +153,17 @@ contract Yield_Bull is ReentrancyGuard {
         depositsPaused = !depositsPaused;
     }
 
-    /**
-     * @dev Returns the maximum amount of shares that can be minted for a specific receiver
-     * @param receiver The address that will receive the shares
-     * @return maxShares The maximum amount of shares that can be minted
-     */
     function maxMint(address receiver) public view returns (uint256 maxShares) {
         uint256 maxAssets = maxDeposit(receiver);
         return convertToShares(maxAssets);
     }
 
-    /**
-     * @dev Previews the amount of assets that would be required for a given mint amount
-     * @param shares The amount of shares to mint
-     * @return assets The amount of assets required
-     */
     function previewMint(uint256 shares) public view returns (uint256 assets) {
         require(shares > 0, "Shares must be greater than zero");
         return convertToAssets(shares);
     }
 
-    /**
-     * @dev Mints shares to receiver by depositing assets
-     * @param shares The amount of shares to mint
-     * @param receiver The address that will receive the shares
-     * @return assets The amount of assets deposited
-     */
-    function mint(
-        uint256 shares,
-        address receiver
-    ) public nonReentrant returns (uint256 assets) {
+    function mint(uint256 shares,address receiver) public nonReentrant returns (uint256 assets) {
         require(shares > 0, "Shares must be greater than zero");
         require(shares <= maxMint(receiver), "Shares exceed limit");
 
@@ -237,14 +183,7 @@ contract Yield_Bull is ReentrancyGuard {
         return assets;
     }
 
-    /**
-     * @dev Returns the maximum amount of assets that can be withdrawn by a specific owner
-     * @param owner The address of the owner
-     * @return maxAssets The maximum amount of assets that can be withdrawn
-     */
-    function maxWithdraw(
-        address owner
-    ) public view returns (uint256 maxAssets) {
+    function maxWithdraw(address owner) public view returns (uint256 maxAssets) {
         uint256 totalAssets = convertToAssets(balances[owner]);
         if (block.timestamp < depositTimestamps[owner] + LOCK_PERIOD) {
             return (totalAssets * INSTANT_WITHDRAWAL_LIMIT) / 100;
@@ -252,31 +191,13 @@ contract Yield_Bull is ReentrancyGuard {
         return totalAssets;
     }
 
-    /**
-     * @dev Previews the amount of shares that would be burned for a given withdrawal amount
-     * @param assets The amount of assets to withdraw
-     * @return shares The amount of shares that would be burned
-     */
-    function previewWithdraw(
-        uint256 assets
-    ) public view returns (uint256 shares) {
+    function previewWithdraw(uint256 assets) public view returns (uint256 shares) {
         require(assets > 0, "Assets must be greater than zero");
         shares = convertToShares(assets);
         return shares > 0 ? shares : 1; // Ensure at least 1 share is burned
     }
 
-    /**
-     * @dev Withdraws assets to receiver by burning shares from owner
-     * @param assets The amount of assets to withdraw
-     * @param receiver The address that will receive the assets
-     * @param owner The address whose shares will be burned
-     * @return shares The amount of shares burned
-     */
-    function withdraw(
-        uint256 assets,
-        address receiver,
-        address owner
-    ) public nonReentrant returns (uint256 shares) {
+    function withdraw(uint256 assets,address receiver,address owner) public nonReentrant returns (uint256 shares) {
         require(assets > 0, "Assets must be greater than zero");
         require(receiver != address(0), "Invalid receiver");
         require(!emergencyShutdown || msg.sender == owner, "Withdrawals suspended");
@@ -327,40 +248,17 @@ contract Yield_Bull is ReentrancyGuard {
         return shares;
     }
 
-    /**
-     * @dev Returns the maximum amount of shares that can be redeemed by a specific owner
-     * @param owner The address of the owner
-     * @return maxShares The maximum amount of shares that can be redeemed
-     */
     function maxRedeem(address owner) public view returns (uint256 maxShares) {
         return balances[owner];
     }
 
-    /**
-     * @dev Previews the amount of assets that would be received for a given redemption amount
-     * @param shares The amount of shares to redeem
-     * @return assets The amount of assets that would be received
-     */
-    function previewRedeem(
-        uint256 shares
-    ) public view returns (uint256 assets) {
+    function previewRedeem(uint256 shares) public view returns (uint256 assets) {
         require(shares > 0, "Shares must be greater than zero");
         assets = convertToAssets(shares);
         return assets > 0 ? assets : 1; // Ensure at least 1 asset is returned
     }
 
-    /**
-     * @dev Redeems shares from owner and sends assets to receiver
-     * @param shares The amount of shares to redeem
-     * @param receiver The address that will receive the assets
-     * @param owner The address whose shares will be burned
-     * @return assets The amount of assets sent to receiver
-     */
-    function redeem(
-        uint256 shares,
-        address receiver,
-        address owner
-    ) public nonReentrant returns (uint256 assets) {
+    function redeem(uint256 shares,address receiver,address owner) public nonReentrant returns (uint256 assets) {
         require(shares > 0, "Shares must be greater than zero");
         require(receiver != address(0), "Invalid receiver");
         require(shares <= balances[owner], "Insufficient shares");
@@ -386,19 +284,10 @@ contract Yield_Bull is ReentrancyGuard {
         return assets;
     }
 
-    /**
-     * @dev Returns the total number of shares issued by the vault
-     * @return The total supply of shares
-     */
     function totalSupply() public view returns (uint256) {
         return totalShares;
     }
 
-    /**
-     * @dev Returns the balance of shares for a specific owner
-     * @param owner The address of the owner
-     * @return The balance of shares
-     */
     function balanceOf(address owner) public view returns (uint256) {
         return balances[owner];
     }
@@ -481,14 +370,13 @@ function safeTransferAndSwap(uint256 amountOutMin) external returns (uint256) {
     }
 
     function _recalculateLockedAssets() internal {
-    // Add implementation
-    for (uint256 i = 0; i < userAddresses.length; i++) {
+        for (uint256 i = 0; i < userAddresses.length; i++) {
         address user = userAddresses[i];
         if (block.timestamp >= depositTimestamps[user] + LOCK_PERIOD) {
             stakedPortions[user] = 0;
             lockedAssets[user] = 0;
         }
-    }
+        }
     }
 
     function toggleEmergencyShutdown() external {
