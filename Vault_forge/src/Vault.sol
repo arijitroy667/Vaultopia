@@ -8,16 +8,9 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 
 
 contract Yield_Bull is ReentrancyGuard {
+
     using SafeERC20 for IERC20;
     using Math for uint256;
-    address public swapContract;
-    uint256 public lastUpdateTime;
-    address public feeCollector;
-    bool public emergencyShutdown;
-    bool public depositsPaused;
-    address public owner;
-    address[] private userAddresses;
-    address public immutable ASSET_TOKEN_ADDRESS =0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
     uint256 public constant MAX_DEPOSIT_PER_USER = 4999 * 1e6;
     uint256 public constant TIMELOCK_DURATION = 2 days;
     uint256 public totalAssets; // Total assets in the vault
@@ -32,6 +25,17 @@ contract Yield_Bull is ReentrancyGuard {
     uint256 public constant INSTANT_WITHDRAWAL_LIMIT = 60;
     IERC20 public immutable asset;
     uint8 private immutable _decimals;
+    uint256 public lastUpdateTime;
+    
+    bool public emergencyShutdown;
+    bool public depositsPaused;
+    
+    address public owner;
+    address[] private userAddresses;
+    address public immutable ASSET_TOKEN_ADDRESS =0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
+    address public swapContract;
+    address public feeCollector;
+
     
     // Events
     event Deposit(
@@ -54,7 +58,7 @@ contract Yield_Bull is ReentrancyGuard {
     event EmergencyShutdownToggled(bool enabled);
     event FeeCollectorUpdated(address indexed newFeeCollector);
 
-    // State variables
+    // mapping variables
     
     mapping(bytes32 => uint256) public pendingOperations;
     mapping(address => uint256) public stakedPortions; // Track 40% staked amount per user
