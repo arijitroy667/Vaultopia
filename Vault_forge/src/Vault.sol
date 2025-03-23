@@ -94,9 +94,9 @@ contract Yield_Bull is ReentrancyGuard {
 
     function exchangeRate() public view returns (uint256) {
         if (totalShares == 0) {
-            return 1e18; // Initial exchange rate: 1 share = 1 asset
+            return 1e6; // Initial exchange rate: 1 share = 1 asset
         }
-        return (totalAssets * 1e18) / totalShares;
+        return (totalAssets * 1e6) / totalShares;
     }
 
     function queueOperation(bytes32 operationId) internal {
@@ -239,7 +239,7 @@ contract Yield_Bull is ReentrancyGuard {
         require(assets > 0, "Assets must be greater than zero");
         require(receiver != address(0), "Invalid receiver");
         require(
-            !emergencyShutdown || msg.sender == _owner,
+            !emergencyShutdown && msg.sender == _owner,
             "Withdrawals suspended"
         );
 
@@ -260,13 +260,6 @@ contract Yield_Bull is ReentrancyGuard {
 
         shares = previewWithdraw(assets);
         require(shares <= balances[_owner], "Insufficient shares");
-
-        // Update locked assets
-        if (isLocked) {
-            require(lockedAssets[_owner] >= assets, "Exceeds unlocked amount");
-            lockedAssets[_owner] -= assets;
-            emit LockedAssetsUpdated(_owner, lockedAssets[owner]);
-        }
 
         // Verify authorization
         if (msg.sender != _owner) {
