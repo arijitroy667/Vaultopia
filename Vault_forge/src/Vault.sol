@@ -6,6 +6,11 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
+modifier onlyContract() {
+    require(msg.sender == address(this), "Only contract can call");
+    _;
+}
+
 // Add USDC interface
 interface IUSDC is IERC20 {
     function decimals() external view returns (uint8);
@@ -37,6 +42,8 @@ contract Yield_Bull is ReentrancyGuard {
     IERC20 public immutable asset;
     uint8 private immutable _decimals;
     uint256 public lastUpdateTime;
+    uint256 public constant UPDATE_INTERVAL = 1 days;
+    uint256 public lastDailyUpdate;
 
     bool public emergencyShutdown;
     bool public depositsPaused;
@@ -85,6 +92,14 @@ contract Yield_Bull is ReentrancyGuard {
     );
     event FeeCollectorUpdated(address indexed newFeeCollector);
     event EmergencyShutdownToggled(bool enabled);
+    event WithdrawalFromLidoInitiated(
+        address indexed user,
+        uint256 wstETHAmount
+    );
+    event LidoWithdrawalCompleted(address indexed user, uint256 ethReceived);
+    event StakedAssetsReturned(address indexed user, uint256 usdcReceived);
+    event DailyUpdatePerformed(uint256 timestamp);
+
     // mapping variables
 
     mapping(bytes32 => uint256) public pendingOperations;
@@ -95,12 +110,69 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => uint256) public lockedAssets;
     mapping(address => bool) private isExistingUser;
     mapping(address => uint256) public userWstETHBalance;
+    mapping(address => bool) public withdrawalInProgress;
+    mapping(address => uint256) public withdrawalRequestIds;
 
     constructor() {
         asset = IERC20(ASSET_TOKEN_ADDRESS);
         USDC = IUSDC(ASSET_TOKEN_ADDRESS);
         _decimals = USDC.decimals();
         owner = msg.sender;
+        lastDailyUpdate = block.timestamp;
+    }
+
+    function performDailyUpdate() external nonReentrant onlyContract {
+        require(
+            block.timestamp >= lastDailyUpdate + UPDATE_INTERVAL,
+            "Too soon to update"
+        );
+
+        for (uint256 i = 0; i < userAddresses.length; i++) {
+            address user = userAddresses[i];
+
+            // Check if lock period has expired and user has staked assets
+            if (
+                block.timestamp >= depositTimestamps[user] + LOCK_PERIOD &&
+                userWstETHBalance[user] > 0 &&
+                !withdrawalInProgress[user]
+            ) {
+                // Initiate automatic withdrawal
+                initiateAutomaticWithdrawal(user);
+            }
+
+            // Check if there's a pending withdrawal that's ready
+            if (withdrawalInProgress[user]) {
+                uint256 requestId = withdrawalRequestIds[user];
+                bool isWithdrawalReady = ILidoWithdrawal(lidoWithdrawalAddress)
+                    .isWithdrawalFinalized(requestId);
+
+                if (isWithdrawalReady) {
+                    // Process the completed withdrawal
+                    processCompletedWithdrawals(user);
+                }
+            }
+        }
+
+        // Cleanup any expired locked assets
+        _recalculateLockedAssets();
+        lastDailyUpdate = block.timestamp;
+
+        emit DailyUpdatePerformed(block.timestamp);
+    }
+
+    function isUpdateNeeded() public view returns (bool) {
+        return block.timestamp >= lastDailyUpdate + UPDATE_INTERVAL;
+    }
+
+    function triggerDailyUpdate() external {
+        require(msg.sender == owner, "Only owner can trigger");
+        require(
+            block.timestamp >= lastDailyUpdate + UPDATE_INTERVAL,
+            "Too soon to update"
+        );
+    
+        // Call performDailyUpdate through the contract itself
+        this.performDailyUpdate();
     }
 
     function exchangeRate() public view returns (uint256) {
@@ -289,6 +361,84 @@ contract Yield_Bull is ReentrancyGuard {
         return shares;
     }
 
+    function initiateAutomaticWithdrawal(address user) internal {
+        require(
+            block.timestamp >= depositTimestamps[user] + LOCK_PERIOD,
+            "Lock period not ended"
+        );
+        require(userWstETHBalance[user] > 0, "No wstETH to withdraw");
+        require(!withdrawalInProgress[user], "Withdrawal already in progress");
+
+        uint256 wstETHAmount = userWstETHBalance[user];
+        withdrawalInProgress[user] = true;
+
+        // First unwrap wstETH to stETH
+        IWstETH(wstETHAddress).approve(lidoWithdrawalAddress, wstETHAmount);
+        uint256 stETHAmount = IWstETH(wstETHAddress).unwrap(wstETHAmount);
+
+        // Request withdrawal from Lido
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = stETHAmount;
+        uint256[] memory requestIds = ILidoWithdrawal(lidoWithdrawalAddress)
+            .requestWithdrawals(amounts, address(this));
+
+        withdrawalRequestIds[user] = requestIds[0];
+        emit WithdrawalFromLidoInitiated(user, wstETHAmount);
+    }
+
+    function processCompletedWithdrawals(address user) external nonReentrant {
+        require(withdrawalInProgress[user], "No withdrawal in progress");
+        uint256 requestId = withdrawalRequestIds[user];
+
+        // Check if withdrawal is ready
+        bool isWithdrawalReady = ILidoWithdrawal(lidoWithdrawalAddress)
+            .isWithdrawalFinalized(requestId);
+        require(isWithdrawalReady, "Withdrawal not ready");
+
+        // Claim ETH from Lido
+        uint256[] memory requestIds = new uint256[](1);
+        requestIds[0] = requestId;
+        ILidoWithdrawal(lidoWithdrawalAddress).claimWithdrawals(requestIds);
+
+        // Get received ETH amount
+        uint256 ethReceived = address(this).balance;
+        emit LidoWithdrawalCompleted(user, ethReceived);
+
+        // Send ETH to swap contract for USDC conversion
+        ISwapContract(swapContract).depositETH{value: ethReceived}();
+        uint256 usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(0); // Set proper slippage
+
+        // Update user's balances
+        userWstETHBalance[user] = 0;
+        stakedPortions[user] = 0;
+        withdrawalInProgress[user] = false;
+        delete withdrawalRequestIds[user];
+
+        // Add USDC back to user's balance in vault
+        totalAssets += usdcReceived;
+        uint256 sharesToMint = convertToShares(usdcReceived);
+        balances[user] += sharesToMint;
+        totalShares += sharesToMint;
+
+        emit StakedAssetsReturned(user, usdcReceived);
+    }
+
+    function getWithdrawalStatus(
+        address user
+    )
+        external
+        view
+        returns (bool isInProgress, uint256 requestId, bool isFinalized)
+    {
+        isInProgress = withdrawalInProgress[user];
+        requestId = withdrawalRequestIds[user];
+        isFinalized = requestId > 0
+            ? ILidoWithdrawal(lidoWithdrawalAddress).isWithdrawalFinalized(
+                requestId
+            )
+            : false;
+    }
+
     function maxRedeem(address _owner) public view returns (uint256 maxShares) {
         return balances[_owner];
     }
@@ -308,23 +458,48 @@ contract Yield_Bull is ReentrancyGuard {
     ) public nonReentrant returns (uint256 assets) {
         require(shares > 0, "Shares must be greater than zero");
         require(receiver != address(0), "Invalid receiver");
+        require(!emergencyShutdown, "Withdrawals suspended");
+        require(msg.sender == _owner, "Not authorized");
         require(shares <= balances[_owner], "Insufficient shares");
 
-        // Verify authorization
-        if (msg.sender != _owner) {
-            // Implement authorization check (e.g., allowance mechanism)
-            revert("Not authorized");
-        }
-
+        // Calculate assets to redeem
         assets = previewRedeem(shares);
         require(assets > 0, "Assets must be greater than zero");
 
-        // Update state before transfer to prevent reentrancy attacks
-        balances[owner] -= shares;
+        // Check lock period and calculate redeemable amount
+        uint256 depositTime = depositTimestamps[_owner];
+        bool isLocked = block.timestamp < depositTime + LOCK_PERIOD;
+        uint256 totalUserAssets = convertToAssets(balances[_owner]);
+        uint256 redeemableAmount;
+
+        if (isLocked) {
+            // During lock period, only allow redemption up to 60%
+            redeemableAmount = (totalUserAssets * LIQUID_PORTION) / 100;
+            require(
+                assets <= redeemableAmount,
+                "Cannot redeem staked portion during lock period"
+            );
+        } else {
+            // After lock period, allow full redemption
+            redeemableAmount = totalUserAssets;
+            // Reset staked portion if fully redeeming
+            if (assets == totalUserAssets) {
+                stakedPortions[_owner] = 0;
+                userWstETHBalance[_owner] = 0;
+            }
+        }
+
+        require(
+            assets <= redeemableAmount,
+            "Amount exceeds redeemable balance"
+        );
+
+        // Update state before transfer
+        balances[_owner] -= shares;
         totalShares -= shares;
         totalAssets -= assets;
 
-        // Transfer assets from vault to receiver
+        // Transfer assets to receiver
         asset.safeTransfer(receiver, assets);
 
         emit Withdraw(msg.sender, receiver, _owner, assets, shares);
