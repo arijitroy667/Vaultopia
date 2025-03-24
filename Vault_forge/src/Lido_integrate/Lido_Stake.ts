@@ -83,12 +83,20 @@ async function stakeWithLido(amount: bigint) {
       account: ACCOUNT_ADDRESS,
     });
 
-    console.log('Staking successful:');
-    console.log('- TX Hash:', wrapTx.hash);
-    console.log('- stETH Wrapped:', wrapTx.result.stethWrapped);
-    console.log('- wstETH Received:', wrapTx.result.wstethReceived);
-    
-    return wrapTx;
+    // Track both original stETH and received wstETH
+    const staked = {
+      stETH: wrapTx.result.stethWrapped,
+      wstETH: wrapTx.result.wstethReceived,
+      ratio: Number(wrapTx.result.wstethReceived) / 
+             Number(wrapTx.result.stethWrapped)
+    };
+
+  console.log('Staking Details:');
+  console.log(`- stETH Wrapped: ${ethers.formatEther(staked.stETH)}`);
+  console.log(`- wstETH Received: ${ethers.formatEther(staked.wstETH)}`);
+  console.log(`- Conversion Ratio: ${staked.ratio}`);
+
+  return staked;
   } catch (error) {
     const sdkError = error as SDKError;
     console.error('Staking failed:', sdkError.errorMessage, sdkError.code);

@@ -83,17 +83,20 @@ contract Receiver {
         _stakeWithLido();
     }
 
-    function _stakeWithLido() internal {
-        require(lidoContract != address(0), "Lido contract not set");
-        uint256 balance = address(this).balance;
-        require(balance > 0, "No ETH to stake");
+    function stakeETHWithLido() external payable returns (uint256) {
+        uint256 ethAmount = msg.value;
 
-        // Use Lido's submit function to stake ETH and receive stETH
-        uint256 stEthReceived = ILido(lidoContract).submit{value: balance}(
+        // Stake ETH and get stETH
+        uint256 stETHReceived = ILido(lidoContract).submit{value: ethAmount}(
             address(0)
         );
 
-        emit ETHStakedWithLido(balance, stEthReceived);
+        // Wrap stETH to wstETH using Lido SDK
+        uint256 wstETHReceived = ILidoWrapper(lidoWrapperContract).wrap(
+            stETHReceived
+        );
+
+        return wstETHReceived;
     }
 
     function getBalance() external view returns (uint256) {

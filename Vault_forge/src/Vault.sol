@@ -78,10 +78,13 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 stakedAmount,
         uint256 unlockTime
     );
-    event EmergencyShutdownToggled(bool enabled);
+    event WstETHBalanceUpdated(
+        address indexed user,
+        uint256 stakedUSDC,
+        uint256 wstETHReceived
+    );
     event FeeCollectorUpdated(address indexed newFeeCollector);
-    event WstETHBalanceUpdated(address indexed user, uint256 amount);
-
+    event EmergencyShutdownToggled(bool enabled);
     // mapping variables
 
     mapping(bytes32 => uint256) public pendingOperations;
@@ -359,24 +362,32 @@ contract Yield_Bull is ReentrancyGuard {
 
         // Execute swap for staking
         USDC.approve(swapContract, amountToStake);
-        uint256 result = ISwapContract(swapContract).takeAndSwapUSDC(
+        uint256 ethReceived = ISwapContract(swapContract).takeAndSwapUSDC(
             amountToStake,
             amountOutMin
         );
 
-        // Update balances
-        userWstETHBalance[beneficiary] += result; // Track wstETH received
-        stakedPortions[beneficiary] += amountToStake; // Track USDC amount staked
+        // Stake ETH and get wstETH
+        uint256 wstETHReceived = IReceiver(receiverContract).stakeETHWithLido{
+            value: ethReceived
+        }();
 
-        emit WstETHBalanceUpdated(beneficiary, userWstETHBalance[beneficiary]);
+        // Update balances
+        userWstETHBalance[beneficiary] += wstETHReceived;
+        stakedPortions[beneficiary] += amountToStake;
+
+        emit SwapInitiated(amountToStake, amountOutMin); // Record the swap
+        emit WstETHBalanceUpdated(beneficiary, amountToStake, wstETHReceived); // Record wstETH received
         emit StakeInitiated(
             beneficiary,
             amountToStake,
             block.timestamp + LOCK_PERIOD
-        );
+        ); // Record lock period start
 
+        // Reset approval as security measure
         USDC.approve(swapContract, 0);
-        return result;
+
+        return wstETHReceived;
     }
 
     function updateWstETHBalance(address user, uint256 amount) external {
