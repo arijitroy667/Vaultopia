@@ -59,7 +59,7 @@ contract SwapContract {
      * @param amountOutMin Minimum amount of ETH expected from the swap
      * @return amountOut The amount of ETH sent to the receiver
      */
-    // New function in Swap contract that swaps ALL USDC (not just 40%)
+    // New function in Swap contract that swaps ALL USDC
     function takeAndSwapUSDC(
         uint256 amount,
         uint256 amountOutMin

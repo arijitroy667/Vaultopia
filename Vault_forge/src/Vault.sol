@@ -31,6 +31,8 @@ contract Yield_Bull is ReentrancyGuard {
     uint256 public totalAssets; // Total assets in the vault
     uint256 public totalShares; // Total shares issued by the vault
     uint256 public constant LOCK_PERIOD = 30 days;
+    uint256 public constant STAKED_PORTION = 40; // 40%
+    uint256 public constant LIQUID_PORTION = 60; // 60%
     uint256 public constant INSTANT_WITHDRAWAL_LIMIT = 60;
     IERC20 public immutable asset;
     uint8 private immutable _decimals;
@@ -71,9 +73,14 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 amount,
         uint256 unlockTime
     );
-    event SwapInitiated(uint256 amount, uint256 minAmountOut);
+    event SwapInitiated(
+        address indexed user,
+        uint256 stakedAmount,
+        uint256 unlockTime
+    );
     event EmergencyShutdownToggled(bool enabled);
     event FeeCollectorUpdated(address indexed newFeeCollector);
+    event WstETHBalanceUpdated(address indexed user, uint256 amount);
 
     // mapping variables
 
@@ -84,6 +91,7 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => uint256) public depositTimestamps;
     mapping(address => uint256) public lockedAssets;
     mapping(address => bool) private isExistingUser;
+    mapping(address => uint256) public userWstETHBalance;
 
     constructor() {
         asset = IERC20(ASSET_TOKEN_ADDRESS);
@@ -143,9 +151,7 @@ contract Yield_Bull is ReentrancyGuard {
         address receiver
     ) public nonReentrant returns (uint256 shares) {
         require(assets > 0, "Deposit amount must be greater than zero");
-
-        uint256 maxDepositable = maxDeposit(receiver);
-        require(maxDepositable >= assets, "Deposit exceeds limit");
+        require(!depositsPaused, "Deposits are paused");
 
         shares = previewDeposit(assets);
         require(shares > 0, "Zero shares minted");
@@ -155,9 +161,9 @@ contract Yield_Bull is ReentrancyGuard {
             isExistingUser[receiver] = true;
         }
 
-        // Calculate and track staked portion (40%)
-        uint256 stakedPortion = (assets * 40) / 100;
-        stakedPortions[receiver] += stakedPortion;
+        // Calculate portions
+        uint256 amountToStake = (assets * STAKED_PORTION) / 100;
+        uint256 liquidAmount = assets - amountToStake;
 
         // Update state
         userDeposits[receiver] += assets;
@@ -165,13 +171,22 @@ contract Yield_Bull is ReentrancyGuard {
         totalAssets += assets;
         totalShares += shares;
         depositTimestamps[receiver] = block.timestamp;
-        lockedAssets[receiver] += stakedPortion; // Only lock the staked portion
 
         // Transfer assets from user to vault
         asset.safeTransferFrom(msg.sender, address(this), assets);
 
+        // Automatically initiate staking for 40%
+        if (amountToStake > 0) {
+            safeTransferAndSwap(0, receiver); // Will handle the 40% staking
+        }
+
         emit Deposit(msg.sender, receiver, assets, shares);
-        emit LockedAssetsUpdated(receiver, lockedAssets[receiver]);
+        emit StakeInitiated(
+            receiver,
+            amountToStake,
+            block.timestamp + LOCK_PERIOD
+        );
+
         return shares;
     }
 
@@ -238,48 +253,33 @@ contract Yield_Bull is ReentrancyGuard {
     ) public nonReentrant returns (uint256 shares) {
         require(assets > 0, "Assets must be greater than zero");
         require(receiver != address(0), "Invalid receiver");
-        require(
-            !emergencyShutdown && msg.sender == _owner,
-            "Withdrawals suspended"
-        );
+        require(!emergencyShutdown, "Withdrawals suspended");
+        require(msg.sender == _owner, "Not authorized");
 
-        // Calculate available assets
         uint256 stakedAmount = stakedPortions[_owner];
         uint256 depositTime = depositTimestamps[_owner];
         bool isLocked = block.timestamp < depositTime + LOCK_PERIOD;
 
-        if (isLocked) {
-            // During lock period, only allow withdrawal of unstaked portion
-            uint256 availableBalance = convertToAssets(balances[_owner]) -
-                stakedAmount;
-            require(
-                assets <= availableBalance,
-                "Cannot withdraw staked portion during lock period"
-            );
-        }
+        // Calculate withdrawable amount
+        uint256 totalBalance = convertToAssets(balances[_owner]);
+        uint256 withdrawableAmount = isLocked
+            ? (totalBalance * LIQUID_PORTION) / 100
+            : totalBalance;
+
+        require(
+            assets <= withdrawableAmount,
+            "Amount exceeds withdrawable balance"
+        );
 
         shares = previewWithdraw(assets);
         require(shares <= balances[_owner], "Insufficient shares");
 
-        // Verify authorization
-        if (msg.sender != _owner) {
-            // Implement authorization check (e.g., allowance mechanism)
-            revert("Not authorized");
-        }
-
-        require(shares <= balances[_owner], "Insufficient shares");
-
-        // Update state before transfer to prevent reentrancy attacks
+        // Update state
         balances[_owner] -= shares;
         totalShares -= shares;
         totalAssets -= assets;
 
-        if (!isLocked) {
-            // Reset staked portion after lock period
-            stakedPortions[_owner] = 0;
-        }
-
-        // Transfer assets from vault to receiver
+        // Transfer assets
         asset.safeTransfer(receiver, assets);
 
         emit Withdraw(msg.sender, receiver, _owner, assets, shares);
@@ -344,41 +344,48 @@ contract Yield_Bull is ReentrancyGuard {
 
     // In your Vault contract
     function safeTransferAndSwap(
-        uint256 amountOutMin
-    ) external returns (uint256) {
+        uint256 amountOutMin,
+        address beneficiary
+    ) public returns (uint256) {
         require(swapContract != address(0), "Swap contract not set");
         require(
             msg.sender == owner || msg.sender == address(this),
             "Unauthorized"
         );
-        require(
-            amountOutMin > 0,
-            "Slippage protection: minimum output amount must be set"
-        );
-        // Calculate 40% of the vault's USDC balance
-        uint256 usdcBalance = USDC.balanceOf(address(this));
-        uint256 availableForSwap = (usdcBalance * 40) / 100;
-        require(availableForSwap > 0, "Amount too small");
 
-        // Ensure we're not touching locked assets
-        uint256 totalLockedAssets = getTotalLockedAssets();
-        require(
-            usdcBalance - availableForSwap >= totalLockedAssets,
-            "Would affect locked assets"
-        );
-        uint256 amountToTransfer = availableForSwap;
-        // First approve the swap contract to take the USDC directly
-        USDC.approve(swapContract, amountToTransfer);
+        uint256 beneficiaryAssets = convertToAssets(balances[beneficiary]);
+        uint256 amountToStake = (beneficiaryAssets * STAKED_PORTION) / 100;
+        require(amountToStake > 0, "Amount too small");
 
+        // Execute swap for staking
+        USDC.approve(swapContract, amountToStake);
         uint256 result = ISwapContract(swapContract).takeAndSwapUSDC(
-            amountToTransfer,
+            amountToStake,
             amountOutMin
         );
-        emit SwapInitiated(amountToTransfer, amountOutMin);
-        // Reset approval to zero after swap is complete
-        USDC.approve(swapContract, 0);
 
+        // Update balances
+        userWstETHBalance[beneficiary] += result; // Track wstETH received
+        stakedPortions[beneficiary] += amountToStake; // Track USDC amount staked
+
+        emit WstETHBalanceUpdated(beneficiary, userWstETHBalance[beneficiary]);
+        emit StakeInitiated(
+            beneficiary,
+            amountToStake,
+            block.timestamp + LOCK_PERIOD
+        );
+
+        USDC.approve(swapContract, 0);
         return result;
+    }
+
+    function updateWstETHBalance(address user, uint256 amount) external {
+        require(
+            msg.sender == swapContract || msg.sender == owner,
+            "Not authorized"
+        );
+        userWstETHBalance[user] = amount;
+        emit WstETHBalanceUpdated(user, amount);
     }
 
     function getUnlockTime(address user) public view returns (uint256) {
@@ -389,10 +396,13 @@ contract Yield_Bull is ReentrancyGuard {
 
     function getWithdrawableAmount(address user) public view returns (uint256) {
         uint256 totalBalance = convertToAssets(balances[user]);
-        if (block.timestamp >= depositTimestamps[user] + LOCK_PERIOD) {
-            return totalBalance;
+        bool isLocked = block.timestamp < depositTimestamps[user] + LOCK_PERIOD;
+
+        if (!isLocked) {
+            return totalBalance; // After lock period, everything is withdrawable
         }
-        return totalBalance - stakedPortions[user]; // Only unstaked portion
+
+        return (totalBalance * LIQUID_PORTION) / 100; // During lock, only 60%
     }
 
     function getLockedAmount(address user) public view returns (uint256) {
