@@ -6,14 +6,34 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
-modifier onlyContract() {
-    require(msg.sender == address(this), "Only contract can call");
-    _;
-}
-
 // Add USDC interface
 interface IUSDC is IERC20 {
     function decimals() external view returns (uint8);
+}
+
+interface ILidoWithdrawal {
+    function requestWithdrawals(
+        uint256[] calldata amounts,
+        address recipient
+    ) external returns (uint256[] memory requestIds);
+
+    function claimWithdrawals(uint256[] calldata requestIds) external;
+
+    function isWithdrawalFinalized(
+        uint256 requestId
+    ) external view returns (bool);
+}
+
+interface IWstETH {
+    function wrap(uint256 _stETHAmount) external returns (uint256);
+
+    function unwrap(uint256 _wstETHAmount) external returns (uint256);
+
+    function approve(address spender, uint256 amount) external returns (bool);
+}
+
+interface IReceiver {
+    function stakeETHWithLido() external payable returns (uint256);
 }
 
 // Call the function that both takes the USDC and performs the swap
@@ -22,11 +42,26 @@ interface ISwapContract {
         uint256 amount,
         uint256 amountOutMin
     ) external returns (uint256);
+
+    function depositETH() external payable;
+
+    function swapAllETHForUSDC(
+        uint256 minUSDCAmount
+    ) external returns (uint256);
 }
 
 contract Yield_Bull is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
+
+    modifier onlyContract() {
+        require(msg.sender == address(this), "Only contract can call");
+        _;
+    }
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not authorized");
+        _;
+    }
 
     // Define USDC as immutable
     IUSDC public immutable USDC;
@@ -54,6 +89,9 @@ contract Yield_Bull is ReentrancyGuard {
         0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
     address public swapContract;
     address public feeCollector;
+    address public lidoWithdrawalAddress;
+    address public wstETHAddress;
+    address public receiverContract;
 
     // Events
     event Deposit(
@@ -99,6 +137,11 @@ contract Yield_Bull is ReentrancyGuard {
     event LidoWithdrawalCompleted(address indexed user, uint256 ethReceived);
     event StakedAssetsReturned(address indexed user, uint256 usdcReceived);
     event DailyUpdatePerformed(uint256 timestamp);
+    event StakeInitiated(
+        address indexed user,
+        uint256 amount,
+        uint256 unlockTime
+    );
 
     // mapping variables
 
@@ -113,12 +156,77 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => bool) public withdrawalInProgress;
     mapping(address => uint256) public withdrawalRequestIds;
 
-    constructor() {
+    constructor(address _lidoWithdrawal, address _wstETH, address _receiver) {
+        require(
+            _lidoWithdrawal != address(0),
+            "Invalid Lido withdrawal address"
+        );
+        require(_wstETH != address(0), "Invalid wstETH address");
+        require(_receiver != address(0), "Invalid receiver address");
+
+        lidoWithdrawalAddress = _lidoWithdrawal;
+        wstETHAddress = _wstETH;
+        receiverContract = _receiver;
+
         asset = IERC20(ASSET_TOKEN_ADDRESS);
         USDC = IUSDC(ASSET_TOKEN_ADDRESS);
         _decimals = USDC.decimals();
         owner = msg.sender;
         lastDailyUpdate = block.timestamp;
+    }
+
+    function setLidoWithdrawalAddress(
+        address _lidoWithdrawal
+    ) external onlyOwner {
+        require(_lidoWithdrawal != address(0), "Invalid address");
+        lidoWithdrawalAddress = _lidoWithdrawal;
+    }
+
+    function setWstETHAddress(address _wstETH) external onlyOwner {
+        require(_wstETH != address(0), "Invalid address");
+        wstETHAddress = _wstETH;
+    }
+
+    function setReceiverContract(address _receiver) external onlyOwner {
+        require(_receiver != address(0), "Invalid address");
+        receiverContract = _receiver;
+    }
+
+    function processCompletedWithdrawals(address user) public nonReentrant {
+        require(withdrawalInProgress[user], "No withdrawal in progress");
+        uint256 requestId = withdrawalRequestIds[user];
+
+        // Check if withdrawal is ready
+        bool isWithdrawalReady = ILidoWithdrawal(lidoWithdrawalAddress)
+            .isWithdrawalFinalized(requestId);
+        require(isWithdrawalReady, "Withdrawal not ready");
+
+        // Claim ETH from Lido
+        uint256[] memory requestIds = new uint256[](1);
+        requestIds[0] = requestId;
+        ILidoWithdrawal(lidoWithdrawalAddress).claimWithdrawals(requestIds);
+
+        // Get received ETH amount
+        uint256 ethReceived = address(this).balance;
+        emit LidoWithdrawalCompleted(user, ethReceived);
+
+        // Send ETH to swap contract for USDC conversion
+        ISwapContract(swapContract).depositETH{value: ethReceived}();
+        uint256 usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(0); // Set proper slippage
+
+        // Update user's balances
+        userWstETHBalance[user] = 0;
+        stakedPortions[user] = 0;
+        withdrawalInProgress[user] = false;
+        delete withdrawalRequestIds[user];
+
+        // Add USDC back to user's balance in vault
+        totalAssets += usdcReceived;
+        uint256 sharesToMint = convertToShares(usdcReceived);
+        balances[user] += sharesToMint;
+        totalShares += sharesToMint;
+
+        emit StakedAssetsReturned(user, usdcReceived);
     }
 
     function performDailyUpdate() external nonReentrant onlyContract {
@@ -170,7 +278,7 @@ contract Yield_Bull is ReentrancyGuard {
             block.timestamp >= lastDailyUpdate + UPDATE_INTERVAL,
             "Too soon to update"
         );
-    
+
         // Call performDailyUpdate through the contract itself
         this.performDailyUpdate();
     }
@@ -238,7 +346,6 @@ contract Yield_Bull is ReentrancyGuard {
 
         // Calculate portions
         uint256 amountToStake = (assets * STAKED_PORTION) / 100;
-        uint256 liquidAmount = assets - amountToStake;
 
         // Update state
         userDeposits[receiver] += assets;
@@ -331,7 +438,6 @@ contract Yield_Bull is ReentrancyGuard {
         require(!emergencyShutdown, "Withdrawals suspended");
         require(msg.sender == _owner, "Not authorized");
 
-        uint256 stakedAmount = stakedPortions[_owner];
         uint256 depositTime = depositTimestamps[_owner];
         bool isLocked = block.timestamp < depositTime + LOCK_PERIOD;
 
@@ -384,43 +490,6 @@ contract Yield_Bull is ReentrancyGuard {
 
         withdrawalRequestIds[user] = requestIds[0];
         emit WithdrawalFromLidoInitiated(user, wstETHAmount);
-    }
-
-    function processCompletedWithdrawals(address user) external nonReentrant {
-        require(withdrawalInProgress[user], "No withdrawal in progress");
-        uint256 requestId = withdrawalRequestIds[user];
-
-        // Check if withdrawal is ready
-        bool isWithdrawalReady = ILidoWithdrawal(lidoWithdrawalAddress)
-            .isWithdrawalFinalized(requestId);
-        require(isWithdrawalReady, "Withdrawal not ready");
-
-        // Claim ETH from Lido
-        uint256[] memory requestIds = new uint256[](1);
-        requestIds[0] = requestId;
-        ILidoWithdrawal(lidoWithdrawalAddress).claimWithdrawals(requestIds);
-
-        // Get received ETH amount
-        uint256 ethReceived = address(this).balance;
-        emit LidoWithdrawalCompleted(user, ethReceived);
-
-        // Send ETH to swap contract for USDC conversion
-        ISwapContract(swapContract).depositETH{value: ethReceived}();
-        uint256 usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(0); // Set proper slippage
-
-        // Update user's balances
-        userWstETHBalance[user] = 0;
-        stakedPortions[user] = 0;
-        withdrawalInProgress[user] = false;
-        delete withdrawalRequestIds[user];
-
-        // Add USDC back to user's balance in vault
-        totalAssets += usdcReceived;
-        uint256 sharesToMint = convertToShares(usdcReceived);
-        balances[user] += sharesToMint;
-        totalShares += sharesToMint;
-
-        emit StakedAssetsReturned(user, usdcReceived);
     }
 
     function getWithdrawalStatus(
@@ -551,7 +620,11 @@ contract Yield_Bull is ReentrancyGuard {
         userWstETHBalance[beneficiary] += wstETHReceived;
         stakedPortions[beneficiary] += amountToStake;
 
-        emit SwapInitiated(amountToStake, amountOutMin); // Record the swap
+        emit SwapInitiated(
+            beneficiary,
+            amountToStake,
+            block.timestamp + LOCK_PERIOD
+        ); // Record the swap
         emit WstETHBalanceUpdated(beneficiary, amountToStake, wstETHReceived); // Record wstETH received
         emit StakeInitiated(
             beneficiary,
@@ -571,7 +644,7 @@ contract Yield_Bull is ReentrancyGuard {
             "Not authorized"
         );
         userWstETHBalance[user] = amount;
-        emit WstETHBalanceUpdated(user, amount);
+        emit WstETHBalanceUpdated(user, amount, userWstETHBalance[user]);
     }
 
     function getUnlockTime(address user) public view returns (uint256) {
