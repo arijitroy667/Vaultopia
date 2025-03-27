@@ -79,6 +79,7 @@ contract Yield_Bull is ReentrancyGuard {
     uint256 public lastUpdateTime;
     uint256 public constant UPDATE_INTERVAL = 1 days;
     uint256 public lastDailyUpdate;
+    uint256 public constant PERFORMANCE_FEE = 200; // 2%
 
     bool public emergencyShutdown;
     bool public depositsPaused;
@@ -129,6 +130,7 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 wstETHReceived
     );
     event FeeCollectorUpdated(address indexed newFeeCollector);
+    event PerformanceFeeCollected(address indexed user, uint256 fee);
     event EmergencyShutdownToggled(bool enabled);
     event WithdrawalFromLidoInitiated(
         address indexed user,
@@ -192,7 +194,10 @@ contract Yield_Bull is ReentrancyGuard {
         receiverContract = _receiver;
     }
 
-    function processCompletedWithdrawals(address user) public nonReentrant {
+    function processCompletedWithdrawals(
+        address user,
+        uint256 minUSDCExpected
+    ) public nonReentrant {
         require(withdrawalInProgress[user], "No withdrawal in progress");
         uint256 requestId = withdrawalRequestIds[user];
 
@@ -201,32 +206,56 @@ contract Yield_Bull is ReentrancyGuard {
             .isWithdrawalFinalized(requestId);
         require(isWithdrawalReady, "Withdrawal not ready");
 
+        // Store initial ETH balance
+        uint256 preBalance = address(this).balance;
+
         // Claim ETH from Lido
         uint256[] memory requestIds = new uint256[](1);
         requestIds[0] = requestId;
         ILidoWithdrawal(lidoWithdrawalAddress).claimWithdrawals(requestIds);
 
-        // Get received ETH amount
-        uint256 ethReceived = address(this).balance;
+        // Calculate actual ETH received
+        uint256 ethReceived = address(this).balance - preBalance;
         emit LidoWithdrawalCompleted(user, ethReceived);
 
-        // Send ETH to swap contract for USDC conversion
+        // Send ETH to swap contract with slippage protection
         ISwapContract(swapContract).depositETH{value: ethReceived}();
-        uint256 usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(0); // Set proper slippage
+        uint256 usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(
+            minUSDCExpected
+        );
+        require(usdcReceived >= minUSDCExpected, "Slippage too high");
 
-        // Update user's balances
+        // Calculate fee on the yield
+        uint256 originalStaked = stakedPortions[user];
+        uint256 yield = usdcReceived > originalStaked
+            ? usdcReceived - originalStaked
+            : 0;
+        uint256 fee = (yield * PERFORMANCE_FEE) / 10000;
+
+        // Transfer fee if applicable
+        uint256 userAmount = usdcReceived;
+        if (fee > 0 && feeCollector != address(0)) {
+            asset.safeTransfer(feeCollector, fee);
+            userAmount = usdcReceived - fee;
+            emit PerformanceFeeCollected(user, fee);
+        }
+
+        // Clear user's staking status
         userWstETHBalance[user] = 0;
         stakedPortions[user] = 0;
         withdrawalInProgress[user] = false;
         delete withdrawalRequestIds[user];
 
-        // Add USDC back to user's balance in vault
-        totalAssets += usdcReceived;
-        uint256 sharesToMint = convertToShares(usdcReceived);
+        // Calculate shares based on remaining amount
+        uint256 sharesToMint = convertToShares(userAmount);
+        require(sharesToMint > 0, "No shares to mint");
+
+        // Update balances
+        totalAssets += userAmount;
         balances[user] += sharesToMint;
         totalShares += sharesToMint;
 
-        emit StakedAssetsReturned(user, usdcReceived);
+        emit StakedAssetsReturned(user, userAmount);
     }
 
     function performDailyUpdate() external nonReentrant onlyContract {
@@ -592,8 +621,8 @@ contract Yield_Bull is ReentrancyGuard {
     }
 
     function setSwapContract(address _swapContract) external {
-        require(msg.sender == owner, "Not authorized"); // Add this line
-        require(_swapContract != address(0), "Invalid address"); // Add this line
+        require(msg.sender == owner, "Not authorized");
+        require(_swapContract != address(0), "Invalid address");
         swapContract = _swapContract;
     }
 
