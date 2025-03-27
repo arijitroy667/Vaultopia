@@ -287,7 +287,9 @@ contract Yield_Bull is ReentrancyGuard {
         if (totalShares == 0) {
             return 1e6; // Initial exchange rate: 1 share = 1 asset
         }
-        return (totalAssets * 1e6) / totalShares;
+        // Include both liquid assets and staked portions in calculation
+        uint256 totalValue = totalAssets;
+        return (totalValue * 1e6) / totalShares;
     }
 
     function queueOperation(bytes32 operationId) internal {
@@ -300,7 +302,13 @@ contract Yield_Bull is ReentrancyGuard {
         if (totalAssets == 0 || totalShares == 0) {
             return assets; // Initial conversion: 1:1
         }
-        return (assets * totalShares) / totalAssets;
+
+        // Calculate based on current exchange rate
+        uint256 currentRate = exchangeRate();
+        shares = (assets * 1e6) / currentRate;
+
+        // Round down to prevent share inflation
+        return shares;
     }
 
     function convertToAssets(
