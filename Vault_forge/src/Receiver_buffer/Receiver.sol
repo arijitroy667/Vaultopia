@@ -3,12 +3,24 @@ pragma solidity ^0.8.19;
 
 interface ILido {
     function submit(address _referral) external payable returns (uint256);
+
+    function balanceOf(address account) external view returns (uint256);
+
+    function approve(address spender, uint256 amount) external returns (bool);
 }
 
 interface IWstETH {
     function wrap(uint256 _stETHAmount) external returns (uint256);
 
     function unwrap(uint256 _wstETHAmount) external returns (uint256);
+
+    function getStETHByWstETH(
+        uint256 _wstETHAmount
+    ) external view returns (uint256);
+
+    function getWstETHByStETH(
+        uint256 _stETHAmount
+    ) external view returns (uint256);
 }
 
 contract Receiver {
@@ -40,7 +52,14 @@ contract Receiver {
         _;
     }
 
-    constructor() {
+    constructor(address _lido, address _wstETH, address _swap) {
+        require(_lido != address(0), "Invalid Lido address");
+        require(_wstETH != address(0), "Invalid wstETH address");
+        require(_swap != address(0), "Invalid swap address");
+
+        lidoContract = _lido;
+        wstETHContract = _wstETH;
+        swapContract = _swap;
         owner = msg.sender;
     }
 
@@ -56,20 +75,40 @@ contract Receiver {
         emit ReceivedETH(msg.sender, msg.value, staked);
     }
 
-    function _stakeWithLido() internal {
+    function _stakeWithLido() external payable returns (uint256) {
+        require(msg.value > 0, "No ETH sent");
         require(lidoContract != address(0), "Lido contract not set");
-        uint256 ethAmount = address(this).balance;
-        require(ethAmount > 0, "No ETH to stake");
+        require(wstETHContract != address(0), "wstETH contract not set");
 
-        // Stake ETH with Lido and get stETH
-        uint256 stETHReceived = ILido(lidoContract).submit{value: ethAmount}(
+        // Track balances before
+        uint256 preStETHBalance = ILido(lidoContract).balanceOf(address(this));
+
+        // Submit ETH to Lido
+        uint256 stETHReceived = ILido(lidoContract).submit{value: msg.value}(
             address(0)
         );
-        emit ETHStakedWithLido(ethAmount, stETHReceived);
+
+        // Verify stETH receipt
+        uint256 postStETHBalance = ILido(lidoContract).balanceOf(address(this));
+        require(
+            postStETHBalance >= preStETHBalance + stETHReceived,
+            "stETH not received"
+        );
+
+        // Approve wstETH contract to spend stETH
+        require(
+            ILido(lidoContract).approve(wstETHContract, stETHReceived),
+            "stETH approval failed"
+        );
 
         // Wrap stETH to wstETH
         uint256 wstETHReceived = IWstETH(wstETHContract).wrap(stETHReceived);
+        require(wstETHReceived > 0, "No wstETH received");
+
+        emit ETHStakedWithLido(msg.value, stETHReceived);
         emit WstETHReceived(stETHReceived, wstETHReceived);
+
+        return wstETHReceived;
     }
 
     function transferOwnership(address newOwner) external onlyOwner {

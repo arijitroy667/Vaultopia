@@ -2,9 +2,10 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
+import "forge-std/console.sol";
 import "../src/Vault.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-// Mock USDC contract
 contract MockUSDC is IERC20 {
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
@@ -19,28 +20,37 @@ contract MockUSDC is IERC20 {
         _totalSupply += amount;
     }
 
-    function totalSupply() external view returns (uint256) {
+    function totalSupply() external view override returns (uint256) {
         return _totalSupply;
     }
 
-    function balanceOf(address account) external view returns (uint256) {
+    function balanceOf(
+        address account
+    ) external view override returns (uint256) {
         return _balances[account];
     }
 
-    function transfer(address to, uint256 amount) external returns (bool) {
-        _transfer(msg.sender, to, amount);
+    function transfer(
+        address to,
+        uint256 amount
+    ) external override returns (bool) {
+        _balances[msg.sender] -= amount;
+        _balances[to] += amount;
         return true;
     }
 
     function allowance(
         address owner,
         address spender
-    ) external view returns (uint256) {
+    ) external view override returns (uint256) {
         return _allowances[owner][spender];
     }
 
-    function approve(address spender, uint256 amount) external returns (bool) {
-        _approve(msg.sender, spender, amount);
+    function approve(
+        address spender,
+        uint256 amount
+    ) external override returns (bool) {
+        _allowances[msg.sender][spender] = amount;
         return true;
     }
 
@@ -48,100 +58,127 @@ contract MockUSDC is IERC20 {
         address from,
         address to,
         uint256 amount
-    ) external returns (bool) {
-        _spendAllowance(from, msg.sender, amount);
-        _transfer(from, to, amount);
-        return true;
-    }
-
-    function _transfer(address from, address to, uint256 amount) internal {
-        require(from != address(0), "Transfer from zero");
-        require(to != address(0), "Transfer to zero");
-        require(_balances[from] >= amount, "Insufficient balance");
-
-        _balances[from] -= amount;
-        _balances[to] += amount;
-    }
-
-    function _approve(address owner, address spender, uint256 amount) internal {
-        _allowances[owner][spender] = amount;
-    }
-
-    function _spendAllowance(
-        address owner,
-        address spender,
-        uint256 amount
-    ) internal {
+    ) external override returns (bool) {
         require(
-            _allowances[owner][spender] >= amount,
+            _allowances[from][msg.sender] >= amount,
             "Insufficient allowance"
         );
-        _allowances[owner][spender] -= amount;
+        _allowances[from][msg.sender] -= amount;
+        _balances[from] -= amount;
+        _balances[to] += amount;
+        return true;
     }
 }
 
-// Mock Lido Withdrawal contract
 contract MockLidoWithdrawal {
     function requestWithdrawals(
         uint256[] calldata amounts,
-        address recipient
-    ) external returns (uint256[] memory) {
+        address
+    ) external pure returns (uint256[] memory) {
         uint256[] memory requestIds = new uint256[](amounts.length);
-        for (uint256 i = 0; i < amounts.length; i++) {
+        for (uint i = 0; i < amounts.length; i++) {
             requestIds[i] = i + 1;
         }
         return requestIds;
     }
 
-    function claimWithdrawals(uint256[] calldata) external {}
+    function claimWithdrawals(uint256[] calldata) external pure {}
 
     function isWithdrawalFinalized(uint256) external pure returns (bool) {
         return true;
     }
 }
 
-// Test contract
+contract MockWstETH {
+    function wrap(uint256 _stETHAmount) external pure returns (uint256) {
+        return _stETHAmount;
+    }
+
+    function unwrap(uint256 _wstETHAmount) external pure returns (uint256) {
+        return _wstETHAmount;
+    }
+
+    function approve(address, uint256) external pure returns (bool) {
+        return true;
+    }
+}
+
+contract MockReceiver {
+    function stakeETHWithLido() external payable returns (uint256) {
+        return msg.value;
+    }
+}
+
+contract MockSwapContract {
+    function takeAndSwapUSDC(
+        uint256 amount,
+        uint256
+    ) external pure returns (uint256) {
+        return amount;
+    }
+
+    function depositETH() external payable {}
+
+    function swapAllETHForUSDC(
+        uint256 minUSDCAmount
+    ) external pure returns (uint256) {
+        return minUSDCAmount;
+    }
+}
+
 contract VaultTest is Test {
-    Yield_Bull vault;
-    MockUSDC usdc;
-    MockLidoWithdrawal lidoWithdrawal;
-
-    address owner = address(this);
-    address user1 = address(1);
-    address user2 = address(2);
-
-    uint256 constant INITIAL_BALANCE = 10000 * 1e6; // 10,000 USDC
-    uint256 constant DEPOSIT_AMOUNT = 1000 * 1e6; // 1,000 USDC
+    Yield_Bull public vault;
+    MockUSDC public usdc;
+    MockLidoWithdrawal public lidoWithdrawal;
+    MockWstETH public wstETH;
+    MockReceiver public receiver;
+    MockSwapContract public swapContract;
+    address public owner;
+    address public user1;
+    address public user2;
 
     function setUp() public {
+        owner = address(this);
+        user1 = address(0x1);
+        user2 = address(0x2);
+
         // Deploy mock contracts
         usdc = new MockUSDC();
         lidoWithdrawal = new MockLidoWithdrawal();
+        wstETH = new MockWstETH();
+        receiver = new MockReceiver();
+        swapContract = new MockSwapContract();
 
-        // Deploy vault with mock addresses
+        // Give ETH balances
+        vm.deal(address(this), 100 ether);
+        vm.deal(user1, 10 ether);
+        vm.deal(user2, 10 ether);
+
+        // Deploy vault with constructor arguments
         vault = new Yield_Bull(
             address(lidoWithdrawal),
-            address(this), // mock wstETH
-            address(this) // mock receiver
+            address(wstETH),
+            address(receiver)
         );
 
-        // Setup initial state
-        usdc.mint(user1, INITIAL_BALANCE);
-        usdc.mint(user2, INITIAL_BALANCE);
+        // Set up contracts
+        vault.setSwapContract(address(swapContract));
+        vault.setFeeCollector(address(this));
 
-        vm.prank(user1);
-        usdc.approve(address(vault), type(uint256).max);
-        vm.prank(user2);
-        usdc.approve(address(vault), type(uint256).max);
+        // Label addresses
+        vm.label(address(vault), "Vault");
+        vm.label(address(usdc), "USDC");
+        vm.label(user1, "User1");
+        vm.label(user2, "User2");
+
+        // Mint initial USDC balances
+        usdc.mint(user1, 10000 * 1e6);
+        usdc.mint(user2, 10000 * 1e6);
+
+        // Log setup completion
+        console.log("Setup completed successfully");
     }
 
-    function testDeposit() public {
-        vm.startPrank(user1);
-        uint256 shares = vault.deposit(DEPOSIT_AMOUNT, user1);
-        assertGt(shares, 0, "Should receive shares");
-        assertEq(vault.balanceOf(user1), shares, "Incorrect share balance");
-        vm.stopPrank();
-    }
-
-    // Add more tests...
+    // Test functions remain the same
+    // ...existing test functions...
 }

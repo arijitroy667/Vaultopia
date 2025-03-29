@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 // Add USDC interface
 interface IUSDC is IERC20 {
@@ -53,6 +54,7 @@ interface ISwapContract {
 contract Yield_Bull is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
+    using SafeMath for uint256;
 
     modifier onlyContract() {
         require(msg.sender == address(this), "Only contract can call");
@@ -62,10 +64,17 @@ contract Yield_Bull is ReentrancyGuard {
         require(msg.sender == owner, "Not authorized");
         _;
     }
+    modifier onlyAuthorizedOperator() {
+        require(
+            msg.sender == owner || msg.sender == address(this),
+            "Not authorized"
+        );
+        _;
+    }
 
     // Define USDC as immutable
     IUSDC public immutable USDC;
-
+    using SafeMath for uint256;
     uint256 public constant MAX_DEPOSIT_PER_USER = 4999 * 1e6;
     uint256 public constant TIMELOCK_DURATION = 2 days;
     uint256 public totalAssets; // Total assets in the vault
@@ -80,6 +89,13 @@ contract Yield_Bull is ReentrancyGuard {
     uint256 public constant UPDATE_INTERVAL = 1 days;
     uint256 public lastDailyUpdate;
     uint256 public constant PERFORMANCE_FEE = 200; // 2%
+    uint256 public constant MIN_DEPOSIT_AMOUNT = 100 * 1e6; // 100 USDC minimum
+    uint256 public constant DEPOSIT_TIMELOCK = 1 hours;
+    uint256 public totalStakedValue;
+    uint256 public constant FEE_DENOMINATOR = 10000;
+    uint256 public constant MINIMUM_FEE = 1e6; // 1 USDC minimum fee
+    uint256 public accumulatedFees;
+    uint256 public constant AUTO_WITHDRAWAL_SLIPPAGE = 950; // 95% of original stake as minimum
 
     bool public emergencyShutdown;
     bool public depositsPaused;
@@ -137,6 +153,7 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 wstETHAmount
     );
     event LidoWithdrawalCompleted(address indexed user, uint256 ethReceived);
+    event FeesCollected(uint256 amount);
     event StakedAssetsReturned(address indexed user, uint256 usdcReceived);
     event DailyUpdatePerformed(uint256 timestamp);
     event StakeInitiated(
@@ -144,6 +161,19 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 amount,
         uint256 unlockTime
     );
+    event WithdrawalProcessed(
+        address indexed user,
+        uint256 ethReceived,
+        uint256 usdcReceived,
+        uint256 fee,
+        uint256 sharesMinted
+    );
+
+    error NoWithdrawalInProgress();
+    error WithdrawalNotReady();
+    error SlippageTooHigh(uint256 received, uint256 expected);
+    error NoSharesToMint();
+    error InvalidAmount();
 
     // mapping variables
 
@@ -157,6 +187,7 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => uint256) public userWstETHBalance;
     mapping(address => bool) public withdrawalInProgress;
     mapping(address => uint256) public withdrawalRequestIds;
+    mapping(address => uint256) public largeDepositUnlockTime;
 
     constructor(address _lidoWithdrawal, address _wstETH, address _receiver) {
         require(
@@ -194,17 +225,49 @@ contract Yield_Bull is ReentrancyGuard {
         receiverContract = _receiver;
     }
 
+    function calculateFee(uint256 yield) internal pure returns (uint256) {
+        if (yield == 0) return 0;
+
+        uint256 fee = yield.mul(PERFORMANCE_FEE).div(FEE_DENOMINATOR);
+
+        // Don't charge minimum fee if yield is too small
+        if (yield <= MINIMUM_FEE) {
+            return yield;
+        }
+
+        return Math.min(fee, yield);
+    }
+
     function processCompletedWithdrawals(
         address user,
         uint256 minUSDCExpected
-    ) public nonReentrant {
-        require(withdrawalInProgress[user], "No withdrawal in progress");
-        uint256 requestId = withdrawalRequestIds[user];
+    )
+        public
+        nonReentrant
+        onlyAuthorizedOperator
+        returns (uint256 sharesMinted, uint256 usdcReceived)
+    {
+        // Input validation
+        if (!withdrawalInProgress[user]) revert NoWithdrawalInProgress();
+        if (user == address(0)) revert InvalidAmount();
+        if (minUSDCExpected == 0) revert InvalidAmount();
 
-        // Check if withdrawal is ready
-        bool isWithdrawalReady = ILidoWithdrawal(lidoWithdrawalAddress)
-            .isWithdrawalFinalized(requestId);
-        require(isWithdrawalReady, "Withdrawal not ready");
+        // Cache frequently used values
+        uint256 requestId = withdrawalRequestIds[user];
+        uint256 _originalStaked = stakedPortions[user];
+
+        // Check withdrawal status
+        if (
+            !ILidoWithdrawal(lidoWithdrawalAddress).isWithdrawalFinalized(
+                requestId
+            )
+        ) {
+            revert WithdrawalNotReady();
+        }
+
+        // Clear withdrawal state first
+        withdrawalInProgress[user] = false;
+        delete withdrawalRequestIds[user];
 
         // Store initial ETH balance
         uint256 preBalance = address(this).balance;
@@ -214,48 +277,58 @@ contract Yield_Bull is ReentrancyGuard {
         requestIds[0] = requestId;
         ILidoWithdrawal(lidoWithdrawalAddress).claimWithdrawals(requestIds);
 
-        // Calculate actual ETH received
-        uint256 ethReceived = address(this).balance - preBalance;
-        emit LidoWithdrawalCompleted(user, ethReceived);
+        // Verify ETH received
+        uint256 postBalance = address(this).balance;
+        require(postBalance > preBalance, "No ETH received");
+        uint256 ethReceived = postBalance - preBalance;
 
-        // Send ETH to swap contract with slippage protection
+        // Swap ETH for USDC with slippage protection
         ISwapContract(swapContract).depositETH{value: ethReceived}();
-        uint256 usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(
+        usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(
             minUSDCExpected
         );
-        require(usdcReceived >= minUSDCExpected, "Slippage too high");
+        if (usdcReceived < minUSDCExpected)
+            revert SlippageTooHigh(usdcReceived, minUSDCExpected);
 
-        // Calculate fee on the yield
-        uint256 originalStaked = stakedPortions[user];
-        uint256 yield = usdcReceived > originalStaked
-            ? usdcReceived - originalStaked
+        // Calculate and handle fees
+        uint256 yield = usdcReceived > _originalStaked
+            ? usdcReceived - _originalStaked
             : 0;
-        uint256 fee = (yield * PERFORMANCE_FEE) / 10000;
+        uint256 fee = calculateFee(yield);
+        uint256 userAmount = usdcReceived - fee;
 
-        // Transfer fee if applicable
-        uint256 userAmount = usdcReceived;
-        if (fee > 0 && feeCollector != address(0)) {
-            asset.safeTransfer(feeCollector, fee);
-            userAmount = usdcReceived - fee;
+        // Update fee accounting if applicable
+        if (fee > 0) {
+            accumulatedFees = accumulatedFees.add(fee);
             emit PerformanceFeeCollected(user, fee);
         }
 
         // Clear user's staking status
         userWstETHBalance[user] = 0;
         stakedPortions[user] = 0;
-        withdrawalInProgress[user] = false;
-        delete withdrawalRequestIds[user];
 
-        // Calculate shares based on remaining amount
-        uint256 sharesToMint = convertToShares(userAmount);
-        require(sharesToMint > 0, "No shares to mint");
+        // Calculate and mint shares
+        sharesMinted = convertToShares(userAmount);
+        if (sharesMinted == 0) revert NoSharesToMint();
 
-        // Update balances
-        totalAssets += userAmount;
-        balances[user] += sharesToMint;
-        totalShares += sharesToMint;
+        // Update global state
+        totalStakedValue = totalStakedValue.sub(_originalStaked);
+        totalAssets = totalAssets.add(userAmount);
+        totalShares = totalShares.add(sharesMinted);
+        balances[user] = balances[user].add(sharesMinted);
 
+        // Emit events
+        emit WithdrawalProcessed(
+            user,
+            ethReceived,
+            usdcReceived,
+            fee,
+            sharesMinted
+        );
         emit StakedAssetsReturned(user, userAmount);
+        emit LidoWithdrawalCompleted(user, ethReceived);
+
+        return (sharesMinted, userAmount);
     }
 
     function performDailyUpdate() external nonReentrant onlyContract {
@@ -285,7 +358,9 @@ contract Yield_Bull is ReentrancyGuard {
 
                 if (isWithdrawalReady) {
                     // Process the completed withdrawal
-                    processCompletedWithdrawals(user);
+                    uint256 originalStake = stakedPortions[user];
+                    uint256 minExpectedUSDC = stakedPortions[user]; // 1:1 minimum ratio
+                    processCompletedWithdrawals(user, minExpectedUSDC);
                 }
             }
         }
@@ -314,10 +389,10 @@ contract Yield_Bull is ReentrancyGuard {
 
     function exchangeRate() public view returns (uint256) {
         if (totalShares == 0) {
-            return 1e6; // Initial exchange rate: 1 share = 1 asset
+            return 1e6;
         }
-        // Include both liquid assets and staked portions in calculation
-        uint256 totalValue = totalAssets;
+        // Include both liquid and staked assets
+        uint256 totalValue = totalAssets + totalStakedValue;
         return (totalValue * 1e6) / totalShares;
     }
 
@@ -372,9 +447,21 @@ contract Yield_Bull is ReentrancyGuard {
     ) public nonReentrant returns (uint256 shares) {
         require(assets > 0, "Deposit amount must be greater than zero");
         require(!depositsPaused, "Deposits are paused");
+        require(assets >= MIN_DEPOSIT_AMOUNT, "Deposit amount too small");
+        require(!emergencyShutdown, "Deposits suspended");
 
         shares = previewDeposit(assets);
         require(shares > 0, "Zero shares minted");
+
+        if (assets > totalAssets / 10) {
+            // If deposit is > 10% of total assets
+            require(
+                largeDepositUnlockTime[msg.sender] != 0 &&
+                    block.timestamp >= largeDepositUnlockTime[msg.sender],
+                "Large deposit must be queued"
+            );
+            delete largeDepositUnlockTime[msg.sender];
+        }
 
         if (!isExistingUser[receiver]) {
             userAddresses.push(receiver);
@@ -407,6 +494,14 @@ contract Yield_Bull is ReentrancyGuard {
         );
 
         return shares;
+    }
+
+    function queueLargeDeposit() external {
+        require(
+            largeDepositUnlockTime[msg.sender] == 0,
+            "Deposit already queued"
+        );
+        largeDepositUnlockTime[msg.sender] = block.timestamp + DEPOSIT_TIMELOCK;
     }
 
     function toggleDeposits() external {
@@ -641,6 +736,9 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 amountToStake = (beneficiaryAssets * STAKED_PORTION) / 100;
         require(amountToStake > 0, "Amount too small");
 
+        totalStakedValue += amountToStake;
+        stakedPortions[beneficiary] += amountToStake;
+
         // Execute swap for staking
         USDC.approve(swapContract, amountToStake);
         uint256 ethReceived = ISwapContract(swapContract).takeAndSwapUSDC(
@@ -749,5 +847,16 @@ contract Yield_Bull is ReentrancyGuard {
         require(_feeCollector != address(0), "Invalid address");
         feeCollector = _feeCollector;
         emit FeeCollectorUpdated(_feeCollector);
+    }
+
+    function collectAccumulatedFees() external {
+        require(msg.sender == feeCollector, "Only fee collector");
+        require(accumulatedFees > 0, "No fees to collect");
+
+        uint256 feesToCollect = accumulatedFees;
+        accumulatedFees = 0;
+
+        asset.safeTransfer(feeCollector, feesToCollect);
+        emit FeesCollected(feesToCollect);
     }
 }

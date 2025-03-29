@@ -10,14 +10,26 @@ import { custom } from 'viem';
 import Web3Provider from './web3Provider';
 import { ethers } from "ethers";
 
+
+const LIDO_ADDRESSES = {
+  LIDO_STETH: {
+      holesky: '0x3F1c547b21f65e10480dE3ad8E19fAAC46C95034',
+      mainnet: '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84'
+  },
+  WRAPPED_STETH: {
+      holesky: '0x2aE7Dc0A3B998072f29C3648D616B14D11ab17cA',
+      mainnet: '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0'
+  }
+} as const;
+
 // Receiver contract ABI (simplified for the functions we need)
 const RECEIVER_ABI = [
   {
-    inputs: [],
-    name: "stakeWithLido",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function"
+      inputs: [],
+      name: "_stakeWithLido",
+      outputs: [{ name: "",type: "uint256" }],
+      stateMutability: "payable",
+      type: "function"
   },
   {
     inputs: [],
@@ -27,6 +39,15 @@ const RECEIVER_ABI = [
     type: "function"
   }
 ];
+
+const ERRORS = {
+  NO_ETH: 'No ETH sent',
+  LIDO_NOT_SET: 'Lido contract not set',
+  WSTETH_NOT_SET: 'wstETH contract not set',
+  STETH_NOT_RECEIVED: 'stETH not received',
+  APPROVAL_FAILED: 'stETH approval failed',
+  NO_WSTETH: 'No wstETH received'
+} as const;
 
 // Configuration
 const RECEIVER_ADDRESS = '0xYourReceiverContractAddress' as Address;
@@ -77,33 +98,36 @@ async function stakeWithLido(amount: bigint) {
   try {
     console.log(`Staking ${ethers.formatEther(amount.toString())} ETH with Lido...`);
     
-    const wrapTx = await lidoSDK.staking.wrapETH({
+    const txHash = await walletClient.sendTransaction({
+      to: RECEIVER_ADDRESS,
       value: amount,
-      callback,
       account: ACCOUNT_ADDRESS,
+      data: encodeFunctionData({
+        abi: RECEIVER_ABI,
+        functionName: '_stakeWithLido'
+      })
     });
-
-    // Track both original stETH and received wstETH
-    const staked = {
-      stETH: wrapTx.result.stethWrapped,
-      wstETH: wrapTx.result.wstethReceived,
-      ratio: Number(wrapTx.result.wstethReceived) / 
-             Number(wrapTx.result.stethWrapped)
+    
+    // Wait for transaction receipt
+    const receipt = await rpcProvider.waitForTransactionReceipt({ hash: txHash });
+    
+    // Log transaction details
+    console.log('Staking transaction details:');
+    console.log('- Hash:', txHash);
+    console.log('- Status:', receipt.status === 'success' ? 'Success' : 'Failed');
+    console.log('- Block:', receipt.blockNumber);
+    console.log('- Gas used:', receipt.gasUsed);
+    
+    return {
+      hash: txHash,
+      receipt,
+      status: receipt.status
     };
-
-    console.log('Staking Details:');
-    console.log(`- stETH Wrapped: ${ethers.formatEther(staked.stETH)}`);
-    console.log(`- wstETH Received: ${ethers.formatEther(staked.wstETH)}`);
-    console.log(`- Conversion Ratio: ${staked.ratio}`);
-
-    return staked;
   } catch (error) {
-    const sdkError = error as SDKError;
-    console.error('Staking failed:', sdkError.errorMessage, sdkError.code);
+    console.error('Staking failed:', error);
     throw error;
   }
 }
-
 // Function to trigger staking on the Receiver contract (for ETH already in the contract)
 async function triggerReceiverStaking() {
   try {
@@ -111,7 +135,7 @@ async function triggerReceiverStaking() {
     
     const calldata = encodeFunctionData({
       abi: RECEIVER_ABI,
-      functionName: 'stakeWithLido',
+      functionName: '_stakeWithLido',
     });
     
     const hash = await walletClient.sendTransaction({
@@ -129,20 +153,21 @@ async function triggerReceiverStaking() {
 }
 
 // Function to withdraw stETH from Lido
+// Function to withdraw stETH from Lido
 async function withdrawFromLido(stethAmount: bigint) {
   try {
     console.log(`Requesting withdrawal of ${ethers.formatEther(stethAmount.toString())} stETH...`);
     
-    const withdrawalTx = await lidoSDK.withdrawal.request({
-      amount: stethAmount,
+    const withdrawalTx = await lidoSDK.withdrawals.requestWithdrawals({
+      amounts: [stethAmount],
       callback,
       account: ACCOUNT_ADDRESS,
     });
     
     console.log('Withdrawal request successful:');
     console.log('- TX Hash:', withdrawalTx.hash);
-    console.log('- Request ID:', withdrawalTx.result.requestId);
-    console.log('- Amount of ETH to receive:', withdrawalTx.result.amountOfETH);
+    console.log('- Request IDs:', withdrawalTx.result.requestIds);
+    console.log('- Amount of ETH to receive:', withdrawalTx.result.amountOfStETH);
     
     return withdrawalTx;
   } catch (error) {
@@ -157,7 +182,7 @@ async function claimWithdrawal(requestId: bigint) {
   try {
     console.log(`Claiming ETH for request ID: ${requestId}...`);
     
-    const claimTx = await lidoSDK.withdrawal.claim({
+    const claimTx = await lidoSDK.withdraw.claim({
       requestId,
       callback,
       account: ACCOUNT_ADDRESS,
