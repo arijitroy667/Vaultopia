@@ -188,6 +188,8 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => bool) public withdrawalInProgress;
     mapping(address => uint256) public withdrawalRequestIds;
     mapping(address => uint256) public largeDepositUnlockTime;
+    mapping(address => uint256) public pendingEthStakes;
+    mapping(bytes32 => address[]) public stakeBatches;
 
     constructor(address _lidoWithdrawal, address _wstETH, address _receiver) {
         require(
@@ -736,6 +738,10 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 amountToStake = (beneficiaryAssets * STAKED_PORTION) / 100;
         require(amountToStake > 0, "Amount too small");
 
+        bytes32 batchId = keccak256(
+            abi.encodePacked(block.timestamp, beneficiary, amountToStake)
+        );
+
         totalStakedValue += amountToStake;
         stakedPortions[beneficiary] += amountToStake;
 
@@ -746,14 +752,24 @@ contract Yield_Bull is ReentrancyGuard {
             amountOutMin
         );
 
-        // Stake ETH and get wstETH
-        uint256 wstETHReceived = IReceiver(receiverContract)._stakeWithLido{
-            value: ethReceived
-        }();
+        // Store the amount of ETH being sent for this user
+        pendingEthStakes[beneficiary] = ethReceived;
 
-        // Update balances
-        userWstETHBalance[beneficiary] += wstETHReceived;
-        stakedPortions[beneficiary] += amountToStake;
+        // Add user to current batch
+        stakeBatches[batchId].push(beneficiary);
+
+        // Call receiver with batch ID
+        uint256 wstETHReceived = IReceiver(receiverContract).batchStakeWithLido{
+            value: ethReceived
+        }(batchId);
+
+        // Calculate user's share based on their contribution to the batch
+        uint256 userShare = (wstETHReceived * pendingEthStakes[beneficiary]) /
+            ethReceived;
+        userWstETHBalance[beneficiary] += userShare;
+
+        // Clear pending stake
+        pendingEthStakes[beneficiary] = 0;
 
         emit SwapInitiated(
             beneficiary,
@@ -770,7 +786,7 @@ contract Yield_Bull is ReentrancyGuard {
         // Reset approval as security measure
         USDC.approve(swapContract, 0);
 
-        return wstETHReceived;
+        return userShare;
     }
 
     function updateWstETHBalance(address user, uint256 amount) external {
