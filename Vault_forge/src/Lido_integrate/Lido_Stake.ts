@@ -98,33 +98,41 @@ async function stakeWithLido(amount: bigint) {
   try {
     console.log(`Staking ${ethers.formatEther(amount.toString())} ETH with Lido...`);
     
-    const txHash = await walletClient.sendTransaction({
-      to: RECEIVER_ADDRESS,
+    const stakeTx = await lidoSDK.stake.stakeEth({
       value: amount,
+      callback,
       account: ACCOUNT_ADDRESS,
+      referralAddress: RECEIVER_ADDRESS // Using receiver as referral
+    });
+    
+    // Log staking details
+    console.log('Staking transaction details:');
+    console.log('- Hash:', stakeTx.hash);
+    console.log('- stETH Received:', ethers.formatEther(stakeTx.result.stethReceived));
+    console.log('- Shares Received:', ethers.formatEther(stakeTx.result.sharesReceived));
+    
+    // After staking, wrap stETH to wstETH using the receiver contract
+    const wrapTx = await walletClient.sendTransaction({
+      to: RECEIVER_ADDRESS,
       data: encodeFunctionData({
         abi: RECEIVER_ABI,
         functionName: '_stakeWithLido'
-      })
+      }),
+      account: ACCOUNT_ADDRESS
     });
     
-    // Wait for transaction receipt
-    const receipt = await rpcProvider.waitForTransactionReceipt({ hash: txHash });
-    
-    // Log transaction details
-    console.log('Staking transaction details:');
-    console.log('- Hash:', txHash);
-    console.log('- Status:', receipt.status === 'success' ? 'Success' : 'Failed');
-    console.log('- Block:', receipt.blockNumber);
-    console.log('- Gas used:', receipt.gasUsed);
+    const wrapReceipt = await rpcProvider.waitForTransactionReceipt({ hash: wrapTx });
     
     return {
-      hash: txHash,
-      receipt,
-      status: receipt.status
+      stakeHash: stakeTx.hash,
+      wrapHash: wrapTx,
+      stethReceived: stakeTx.result.stethReceived,
+      sharesReceived: stakeTx.result.sharesReceived,
+      status: wrapReceipt.status
     };
   } catch (error) {
-    console.error('Staking failed:', error);
+    const sdkError = error as SDKError;
+    console.error('Staking failed:', sdkError.errorMessage, sdkError.code);
     throw error;
   }
 }
@@ -152,7 +160,6 @@ async function triggerReceiverStaking() {
   }
 }
 
-// Function to withdraw stETH from Lido
 // Function to withdraw stETH from Lido
 async function withdrawFromLido(stethAmount: bigint) {
   try {

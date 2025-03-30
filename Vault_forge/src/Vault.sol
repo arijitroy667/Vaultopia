@@ -34,7 +34,7 @@ interface IWstETH {
 }
 
 interface IReceiver {
-    function stakeETHWithLido() external payable returns (uint256);
+    function _stakeWithLido() external payable returns (uint256);
 }
 
 // Call the function that both takes the USDC and performs the swap
@@ -747,7 +747,7 @@ contract Yield_Bull is ReentrancyGuard {
         );
 
         // Stake ETH and get wstETH
-        uint256 wstETHReceived = IReceiver(receiverContract).stakeETHWithLido{
+        uint256 wstETHReceived = IReceiver(receiverContract)._stakeWithLido{
             value: ethReceived
         }();
 
