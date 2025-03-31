@@ -65,18 +65,15 @@ contract SwapContract {
         uint256 amountOutMin
     ) external returns (uint256 amountOut) {
         require(msg.sender == vaultContract, "Only vault can call");
-
+        require(amount > 0, "No USDC to swap");
         // Transfer USDC from vault to this contract
         require(
             USDC.transferFrom(vaultContract, address(this), amount),
             "USDC transfer failed"
         );
 
-        uint256 usdcBalance = USDC.balanceOf(address(this));
-        require(usdcBalance > 0, "No USDC to swap");
-
-        // Approve Uniswap to spend ALL USDC
-        USDC.approve(address(swapRouter), usdcBalance);
+        // Approve Uniswap to spend the USDC
+        USDC.approve(address(swapRouter), amount);
 
         try
             swapRouter.exactInputSingle(
@@ -86,7 +83,7 @@ contract SwapContract {
                     fee: poolFee,
                     recipient: address(this),
                     deadline: block.timestamp + 300,
-                    amountIn: usdcBalance,
+                    amountIn: amount,
                     amountOutMinimum: amountOutMin,
                     sqrtPriceLimitX96: 0
                 })
@@ -103,16 +100,16 @@ contract SwapContract {
             );
             require(success, "ETH transfer failed");
 
-            emit SwappedUSDCForETH(usdcBalance, amountOut);
+            emit SwappedUSDCForETH(amount, amountOut);
             return amountOut;
         } catch Error(string memory reason) {
             // Reset the approval
             USDC.approve(address(swapRouter), 0);
 
             // Send USDC back to vault
-            USDC.transfer(vaultContract, usdcBalance);
+            USDC.transfer(vaultContract, amount);
 
-            emit SwapFailed(usdcBalance, reason);
+            emit SwapFailed(amount, reason);
             revert(reason);
         }
     }

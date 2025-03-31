@@ -190,6 +190,7 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => uint256) public largeDepositUnlockTime;
     mapping(address => uint256) public pendingEthStakes;
     mapping(bytes32 => address[]) public stakeBatches;
+    mapping(bytes32 => bool) public processedBatches;
 
     constructor(address _lidoWithdrawal, address _wstETH, address _receiver) {
         require(
@@ -473,6 +474,12 @@ contract Yield_Bull is ReentrancyGuard {
         // Calculate portions
         uint256 amountToStake = (assets * STAKED_PORTION) / 100;
 
+        // Get expected ETH output with 1% slippage tolerance
+        uint256 expectedEth = ISwapContract(swapContract).getExpectedEthForUsdc(
+            amountToStake
+        );
+        uint256 minExpectedEth = (expectedEth * 99) / 100;
+
         // Update state
         userDeposits[receiver] += assets;
         balances[receiver] += shares;
@@ -485,7 +492,7 @@ contract Yield_Bull is ReentrancyGuard {
 
         // Automatically initiate staking for 40%
         if (amountToStake > 0) {
-            safeTransferAndSwap(0, receiver); // Will handle the 40% staking
+            safeTransferAndSwap(minExpectedEth, receiver, amountToStake); // Will handle the 40% staking
         }
 
         emit Deposit(msg.sender, receiver, assets, shares);
@@ -726,16 +733,15 @@ contract Yield_Bull is ReentrancyGuard {
     // In your Vault contract
     function safeTransferAndSwap(
         uint256 amountOutMin,
-        address beneficiary
-    ) public returns (uint256) {
+        address beneficiary,
+        uint256 amountToStake
+    ) public nonReentrant returns (uint256) {
         require(swapContract != address(0), "Swap contract not set");
         require(
             msg.sender == owner || msg.sender == address(this),
             "Unauthorized"
         );
 
-        uint256 beneficiaryAssets = convertToAssets(balances[beneficiary]);
-        uint256 amountToStake = (beneficiaryAssets * STAKED_PORTION) / 100;
         require(amountToStake > 0, "Amount too small");
 
         bytes32 batchId = keccak256(
@@ -746,11 +752,13 @@ contract Yield_Bull is ReentrancyGuard {
         stakedPortions[beneficiary] += amountToStake;
 
         // Execute swap for staking
-        USDC.approve(swapContract, amountToStake);
+        bool success = USDC.approve(swapContract, amountToStake);
+        require(success, "USDC approval failed");
         uint256 ethReceived = ISwapContract(swapContract).takeAndSwapUSDC(
             amountToStake,
             amountOutMin
         );
+        require(ethReceived > 0, "No ETH received from swap");
 
         // Store the amount of ETH being sent for this user
         pendingEthStakes[beneficiary] = ethReceived;
@@ -763,9 +771,11 @@ contract Yield_Bull is ReentrancyGuard {
             value: ethReceived
         }(batchId);
 
+        require(!processedBatches[batchId], "Batch already processed");
+        processedBatches[batchId] = true;
+
         // Calculate user's share based on their contribution to the batch
-        uint256 userShare = (wstETHReceived * pendingEthStakes[beneficiary]) /
-            ethReceived;
+        uint256 userShare = wstETHReceived;
         userWstETHBalance[beneficiary] += userShare;
 
         // Clear pending stake

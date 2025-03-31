@@ -64,21 +64,27 @@ contract Receiver {
     }
 
     receive() external payable {
-        bool staked = false;
-
-        // If auto-stake is enabled and we have a valid Lido contract, stake immediately
-        if (autoStake && lidoContract != address(0) && msg.value > 0) {
-            _stakeWithLido();
-            staked = true;
+        if (msg.sender == swapContract && autoStake && msg.value > 0) {
+            // Stake only the received amount
+            uint256 ethToStake = msg.value;
+            // Similar to batchStakeWithLido but with the received amount only
+            // ...
+            emit ReceivedETHAndStaked(msg.sender, ethToStake);
+        } else {
+            emit ReceivedETH(msg.sender, msg.value, false);
         }
-
-        emit ReceivedETH(msg.sender, msg.value, staked);
     }
 
-    function _stakeWithLido() external payable returns (uint256) {
+    function batchStakeWithLido(
+        bytes32 batchId
+    ) external payable returns (uint256) {
+        require(msg.sender == vaultContract, "Only vault can call");
         require(msg.value > 0, "No ETH sent");
         require(lidoContract != address(0), "Lido contract not set");
         require(wstETHContract != address(0), "wstETH contract not set");
+
+        // Record the batch ID
+        batchStakes[batchId] = msg.value;
 
         // Track balances before
         uint256 preStETHBalance = ILido(lidoContract).balanceOf(address(this));
@@ -105,10 +111,19 @@ contract Receiver {
         uint256 wstETHReceived = IWstETH(wstETHContract).wrap(stETHReceived);
         require(wstETHReceived > 0, "No wstETH received");
 
+        // Record batch result
+        batchResults[batchId] = wstETHReceived;
+
         emit ETHStakedWithLido(msg.value, stETHReceived);
         emit WstETHReceived(stETHReceived, wstETHReceived);
+        emit BatchProcessed(batchId, msg.value, wstETHReceived);
 
         return wstETHReceived;
+    }
+
+    function stakeETH() external onlyAuthorized {
+        require(address(this).balance > 0, "No ETH to stake");
+        _stakeWithLido();
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
