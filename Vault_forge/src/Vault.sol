@@ -265,8 +265,18 @@ contract Yield_Bull is ReentrancyGuard {
 
         // Cache frequently used values
         uint256 requestId = withdrawalRequestIds[user];
-        uint256 _originalStaked = stakedPortions[user];
+        uint256 withdrawnAmount = 0;
+        uint256 withdrawnWstETH = 0;
+        for (uint256 i = 0; i < userStakedDeposits[user].length; i++) {
+            if (userStakedDeposits[user][i].withdrawn) {
+                withdrawnWstETH += userStakedDeposits[user][i].wstETHAmount;
+                withdrawnAmount += userStakedDeposits[user][i].amount; // Track USDC amount
+            }
+        }
 
+        // Only reduce by the amount being withdrawn, not zeroing everything
+        stakedPortions[user] -= withdrawnAmount;
+        userWstETHBalance[user] -= withdrawnWstETH;
         // Check withdrawal status
         if (
             !ILidoWithdrawal(lidoWithdrawalAddress).isWithdrawalFinalized(
@@ -293,8 +303,8 @@ contract Yield_Bull is ReentrancyGuard {
 
         // The rest of the function remains the same...
         // Calculate and handle fees
-        uint256 yield = usdcReceived > _originalStaked
-            ? usdcReceived - _originalStaked
+        uint256 yield = usdcReceived > withdrawnAmount
+            ? usdcReceived - withdrawnAmount
             : 0;
         uint256 fee = calculateFee(yield);
         uint256 userAmount = usdcReceived - fee;
@@ -305,16 +315,12 @@ contract Yield_Bull is ReentrancyGuard {
             emit PerformanceFeeCollected(user, fee);
         }
 
-        // Clear user's staking status
-        userWstETHBalance[user] = 0;
-        stakedPortions[user] = 0;
-
         // Calculate and mint shares
         sharesMinted = convertToShares(userAmount);
         if (sharesMinted == 0) revert NoSharesToMint();
 
         // Update global state
-        totalStakedValue = totalStakedValue.sub(_originalStaked);
+        totalStakedValue = totalStakedValue.sub(withdrawnAmount);
         totalAssets = totalAssets.add(userAmount);
         totalShares = totalShares.add(sharesMinted);
         balances[user] = balances[user].add(sharesMinted);
@@ -615,12 +621,36 @@ contract Yield_Bull is ReentrancyGuard {
         require(userWstETHBalance[user] > 0, "No wstETH to withdraw");
         require(!withdrawalInProgress[user], "Withdrawal already in progress");
 
-        uint256 wstETHAmount = userWstETHBalance[user];
+        uint256 totalWstETHToWithdraw = 0;
+        uint256 totalAmountWithdrawn = 0;
+
+        for (uint256 i = 0; i < userStakedDeposits[user].length; i++) {
+            if (
+                !userStakedDeposits[user][i].withdrawn &&
+                block.timestamp >=
+                userStakedDeposits[user][i].timestamp + LOCK_PERIOD
+            ) {
+                totalWstETHToWithdraw += userStakedDeposits[user][i]
+                    .wstETHAmount;
+                totalAmountWithdrawn += userStakedDeposits[user][i].amount;
+                userStakedDeposits[user][i].withdrawn = true;
+            }
+        }
+
+        // Only proceed if there's something to withdraw
+        require(totalWstETHToWithdraw > 0, "No eligible deposits to withdraw");
+
+        uint256 wstETHAmount = totalWstETHToWithdraw;
         withdrawalInProgress[user] = true;
 
         // First unwrap wstETH to stETH
-        IWstETH(wstETHAddress).approve(lidoWithdrawalAddress, wstETHAmount);
-        uint256 stETHAmount = IWstETH(wstETHAddress).unwrap(wstETHAmount);
+        IWstETH(wstETHAddress).approve(
+            lidoWithdrawalAddress,
+            totalWstETHToWithdraw
+        );
+        uint256 stETHAmount = IWstETH(wstETHAddress).unwrap(
+            totalWstETHToWithdraw
+        );
 
         // Request withdrawal from Lido
         uint256[] memory amounts = new uint256[](1);
