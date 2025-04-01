@@ -72,6 +72,13 @@ contract Yield_Bull is ReentrancyGuard {
         _;
     }
 
+    struct StakedDeposit {
+        uint256 amount;
+        uint256 timestamp;
+        uint256 wstETHAmount;
+        bool withdrawn;
+    }
+
     // Define USDC as immutable
     IUSDC public immutable USDC;
     using SafeMath for uint256;
@@ -191,6 +198,7 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(address => uint256) public pendingEthStakes;
     mapping(bytes32 => address[]) public stakeBatches;
     mapping(bytes32 => bool) public processedBatches;
+    mapping(address => StakedDeposit[]) public userStakedDeposits;
 
     constructor(address _lidoWithdrawal, address _wstETH, address _receiver) {
         require(
@@ -272,27 +280,18 @@ contract Yield_Bull is ReentrancyGuard {
         withdrawalInProgress[user] = false;
         delete withdrawalRequestIds[user];
 
-        // Store initial ETH balance
-        uint256 preBalance = address(this).balance;
-
-        // Claim ETH from Lido
-        uint256[] memory requestIds = new uint256[](1);
-        requestIds[0] = requestId;
-        ILidoWithdrawal(lidoWithdrawalAddress).claimWithdrawals(requestIds);
-
-        // Verify ETH received
-        uint256 postBalance = address(this).balance;
-        require(postBalance > preBalance, "No ETH received");
-        uint256 ethReceived = postBalance - preBalance;
-
-        // Swap ETH for USDC with slippage protection
-        ISwapContract(swapContract).depositETH{value: ethReceived}();
-        usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(
+        // *** NEW CODE: Have Receiver claim and process the withdrawal ***
+        // Get USDC through Receiver → Swap path instead of direct handling
+        usdcReceived = IReceiver(receiverContract).claimWithdrawalFromLido(
+            requestId,
+            user,
             minUSDCExpected
         );
+
         if (usdcReceived < minUSDCExpected)
             revert SlippageTooHigh(usdcReceived, minUSDCExpected);
 
+        // The rest of the function remains the same...
         // Calculate and handle fees
         uint256 yield = usdcReceived > _originalStaked
             ? usdcReceived - _originalStaked
@@ -323,13 +322,13 @@ contract Yield_Bull is ReentrancyGuard {
         // Emit events
         emit WithdrawalProcessed(
             user,
-            ethReceived,
+            0, // We don't track ethReceived in Vault anymore
             usdcReceived,
             fee,
             sharesMinted
         );
         emit StakedAssetsReturned(user, userAmount);
-        emit LidoWithdrawalCompleted(user, ethReceived);
+        emit LidoWithdrawalCompleted(user, 0); // ETH was received by Receiver
 
         return (sharesMinted, userAmount);
     }
@@ -777,6 +776,15 @@ contract Yield_Bull is ReentrancyGuard {
         // Calculate user's share based on their contribution to the batch
         uint256 userShare = wstETHReceived;
         userWstETHBalance[beneficiary] += userShare;
+
+        userStakedDeposits[beneficiary].push(
+            StakedDeposit({
+                amount: amountToStake,
+                timestamp: block.timestamp,
+                wstETHAmount: userShare,
+                withdrawn: false
+            })
+        );
 
         // Clear pending stake
         pendingEthStakes[beneficiary] = 0;

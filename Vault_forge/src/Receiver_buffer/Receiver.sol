@@ -23,6 +23,25 @@ interface IWstETH {
     ) external view returns (uint256);
 }
 
+interface ILidoWithdrawal {
+    function requestWithdrawals(
+        uint256[] calldata amounts,
+        address recipient
+    ) external returns (uint256[] memory requestIds);
+
+    function claimWithdrawals(uint256[] calldata requestIds) external;
+
+    function isWithdrawalFinalized(
+        uint256 requestId
+    ) external view returns (bool);
+}
+
+interface ISwapContract {
+    function swapAllETHForUSDC(
+        uint256 minUSDCAmount
+    ) external returns (uint256);
+}
+
 contract Receiver {
     address public owner;
     address public swapContract;
@@ -38,6 +57,12 @@ contract Receiver {
         address indexed previousOwner,
         address indexed newOwner
     );
+    event WithdrawalClaimed(
+        address indexed user,
+        uint256 requestId,
+        uint256 ethReceived,
+        uint256 usdcReceived
+    );
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Caller is not the owner");
@@ -49,6 +74,11 @@ contract Receiver {
             msg.sender == owner || msg.sender == swapContract,
             "Unauthorized"
         );
+        _;
+    }
+
+    modifier onlyVault() {
+        require(msg.sender == vaultContract, "Only vault can call");
         _;
     }
 
@@ -121,6 +151,46 @@ contract Receiver {
         return wstETHReceived;
     }
 
+    // Add to Receiver.sol
+    function claimWithdrawalFromLido(
+        uint256 requestId,
+        address user,
+        uint256 minUSDCExpected
+    ) external onlyVault returns (uint256 usdcReceived) {
+        require(
+            lidoWithdrawalAddress != address(0),
+            "Lido withdrawal contract not set"
+        );
+
+        // Store initial ETH balance
+        uint256 preBalance = address(this).balance;
+
+        // Create requestIds array for Lido claim
+        uint256[] memory requestIds = new uint256[](1);
+        requestIds[0] = requestId;
+
+        // Claim ETH from Lido - ETH will be sent to this contract
+        ILidoWithdrawal(lidoWithdrawalAddress).claimWithdrawals(requestIds);
+
+        // Verify ETH receipt
+        uint256 postBalance = address(this).balance;
+        require(postBalance > preBalance, "No ETH received");
+        uint256 ethReceived = postBalance - preBalance;
+
+        // Forward ETH to Swap contract
+        (bool success, ) = payable(swapContract).call{value: ethReceived}("");
+        require(success, "ETH transfer failed");
+
+        // Call Swap contract to convert ETH to USDC and send to Vault
+        usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(
+            minUSDCExpected
+        );
+
+        emit WithdrawalClaimed(user, requestId, ethReceived, usdcReceived);
+
+        return usdcReceived;
+    }
+
     function stakeETH() external onlyAuthorized {
         require(address(this).balance > 0, "No ETH to stake");
         _stakeWithLido();
@@ -160,28 +230,6 @@ contract Receiver {
         require(success, "ETH transfer failed");
 
         emit ETHSentToSwap(balance);
-    }
-
-    function stakeWithLido() external onlyAuthorized {
-        _stakeWithLido();
-    }
-
-    function stakeETHWithLido() external payable returns (uint256) {
-        uint256 ethAmount = msg.value;
-        require(ethAmount > 0, "No ETH sent");
-
-        // Stake ETH and get stETH
-        uint256 stETHReceived = ILido(lidoContract).submit{value: ethAmount}(
-            address(0)
-        );
-
-        // Wrap stETH to wstETH
-        uint256 wstETHReceived = IWstETH(wstETHContract).wrap(stETHReceived);
-
-        emit ETHStakedWithLido(ethAmount, stETHReceived);
-        emit WstETHReceived(stETHReceived, wstETHReceived);
-
-        return wstETHReceived;
     }
 
     function getBalance() external view returns (uint256) {
