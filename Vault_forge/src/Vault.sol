@@ -103,6 +103,8 @@ contract Yield_Bull is ReentrancyGuard {
     uint256 public constant MINIMUM_FEE = 1e6; // 1 USDC minimum fee
     uint256 public accumulatedFees;
     uint256 public constant AUTO_WITHDRAWAL_SLIPPAGE = 950; // 95% of original stake as minimum
+    uint256 public lastProcessedUserIndex;
+    uint256 public constant MAX_USERS_PER_UPDATE = 10; // Process 10 users at a time
 
     bool public emergencyShutdown;
     bool public depositsPaused;
@@ -263,7 +265,6 @@ contract Yield_Bull is ReentrancyGuard {
         if (user == address(0)) revert InvalidAmount();
         if (minUSDCExpected == 0) revert InvalidAmount();
 
-        // Cache frequently used values
         uint256 requestId = withdrawalRequestIds[user];
         uint256 withdrawnAmount = 0;
         uint256 withdrawnWstETH = 0;
@@ -345,39 +346,113 @@ contract Yield_Bull is ReentrancyGuard {
             "Too soon to update"
         );
 
-        for (uint256 i = 0; i < userAddresses.length; i++) {
+        uint256 startIndex = lastProcessedUserIndex;
+        uint256 endIndex = Math.min(
+            startIndex + MAX_USERS_PER_UPDATE,
+            userAddresses.length
+        );
+        bool updateComplete = endIndex >= userAddresses.length;
+
+        // Process a limited batch of users
+        for (uint256 i = startIndex; i < endIndex; i++) {
             address user = userAddresses[i];
 
-            // Check if lock period has expired and user has staked assets
-            if (
-                block.timestamp >= depositTimestamps[user] + LOCK_PERIOD &&
-                userWstETHBalance[user] > 0 &&
-                !withdrawalInProgress[user]
-            ) {
-                // Initiate automatic withdrawal
-                initiateAutomaticWithdrawal(user);
-            }
+            // Check if user has staked assets that may need processing
+            if (userWstETHBalance[user] > 0) {
+                // Don't use global depositTimestamps - rely on individual deposit timestamps
+                if (!withdrawalInProgress[user]) {
+                    // Try to initiate withdrawals for eligible deposits
+                    try this.safeInitiateWithdrawal(user) {
+                        // Success: withdrawal initiated
+                    } catch {
+                        // Failed but continue with other users
+                        emit WithdrawalInitiationFailed(user);
+                    }
+                }
 
-            // Check if there's a pending withdrawal that's ready
-            if (withdrawalInProgress[user]) {
-                uint256 requestId = withdrawalRequestIds[user];
-                bool isWithdrawalReady = ILidoWithdrawal(lidoWithdrawalAddress)
-                    .isWithdrawalFinalized(requestId);
+                // Check for pending withdrawals that are ready
+                if (withdrawalInProgress[user]) {
+                    uint256 requestId = withdrawalRequestIds[user];
+                    bool isWithdrawalReady = ILidoWithdrawal(
+                        lidoWithdrawalAddress
+                    ).isWithdrawalFinalized(requestId);
 
-                if (isWithdrawalReady) {
-                    // Process the completed withdrawal
-                    uint256 originalStake = stakedPortions[user];
-                    uint256 minExpectedUSDC = stakedPortions[user]; // 1:1 minimum ratio
-                    processCompletedWithdrawals(user, minExpectedUSDC);
+                    if (isWithdrawalReady) {
+                        try this.safeProcessCompletedWithdrawal(user) {
+                            // Success: withdrawal processed
+                        } catch {
+                            // Failed but continue with other users
+                            emit WithdrawalProcessingFailed(user, requestId);
+                        }
+                    }
                 }
             }
         }
 
-        // Cleanup any expired locked assets
-        _recalculateLockedAssets();
-        lastDailyUpdate = block.timestamp;
+        // Update the index for the next batch
+        lastProcessedUserIndex = updateComplete ? 0 : endIndex;
 
-        emit DailyUpdatePerformed(block.timestamp);
+        // Only update timestamp when we've processed all users
+        if (updateComplete) {
+            // Cleanup any expired locked assets
+            _recalculateLockedAssets();
+            lastDailyUpdate = block.timestamp;
+            emit DailyUpdatePerformed(block.timestamp);
+        } else {
+            emit DailyUpdatePartial(startIndex, endIndex, userAddresses.length);
+        }
+    }
+
+    function safeInitiateWithdrawal(
+        address user
+    ) external onlyContract returns (bool) {
+        // Individual deposits are checked within initiateAutomaticWithdrawal
+        initiateAutomaticWithdrawal(user);
+        return true;
+    }
+
+    function initiateAutomaticWithdrawal(address user) internal {
+        require(userWstETHBalance[user] > 0, "No wstETH to withdraw");
+
+        uint256 totalWstETHToWithdraw = 0;
+        uint256 totalAmountWithdrawn = 0;
+
+        for (uint256 i = 0; i < userStakedDeposits[user].length; i++) {
+            if (
+                !userStakedDeposits[user][i].withdrawn &&
+                block.timestamp >=
+                userStakedDeposits[user][i].timestamp + LOCK_PERIOD
+            ) {
+                totalWstETHToWithdraw += userStakedDeposits[user][i]
+                    .wstETHAmount;
+                totalAmountWithdrawn += userStakedDeposits[user][i].amount;
+                userStakedDeposits[user][i].withdrawn = true;
+            }
+        }
+
+        // Only proceed if there's something to withdraw
+        require(totalWstETHToWithdraw > 0, "No eligible deposits to withdraw");
+
+        uint256 wstETHAmount = totalWstETHToWithdraw;
+        withdrawalInProgress[user] = true;
+
+        // First unwrap wstETH to stETH
+        IWstETH(wstETHAddress).approve(
+            lidoWithdrawalAddress,
+            totalWstETHToWithdraw
+        );
+        uint256 stETHAmount = IWstETH(wstETHAddress).unwrap(
+            totalWstETHToWithdraw
+        );
+
+        // Request withdrawal from Lido
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = stETHAmount;
+        uint256[] memory requestIds = ILidoWithdrawal(lidoWithdrawalAddress)
+            .requestWithdrawals(amounts, receiverContract);
+
+        withdrawalRequestIds[user] = requestIds[0];
+        emit WithdrawalFromLidoInitiated(user, wstETHAmount);
     }
 
     function isUpdateNeeded() public view returns (bool) {
@@ -560,7 +635,20 @@ contract Yield_Bull is ReentrancyGuard {
         address _owner
     ) public view returns (uint256 maxAssets) {
         uint256 totalUserAssets = convertToAssets(balances[_owner]);
-        if (block.timestamp < depositTimestamps[_owner] + LOCK_PERIOD) {
+
+        // Check if ANY deposits are unlocked
+        bool hasUnlockedDeposits = false;
+        for (uint256 i = 0; i < userStakedDeposits[_owner].length; i++) {
+            if (
+                block.timestamp >=
+                userStakedDeposits[_owner][i].timestamp + LOCK_PERIOD
+            ) {
+                hasUnlockedDeposits = true;
+                break;
+            }
+        }
+
+        if (!hasUnlockedDeposits) {
             return (totalAssets * INSTANT_WITHDRAWAL_LIMIT) / 100;
         }
         return totalUserAssets;
@@ -579,25 +667,36 @@ contract Yield_Bull is ReentrancyGuard {
         address receiver,
         address _owner
     ) public nonReentrant returns (uint256 shares) {
+        // Basic validations
         require(assets > 0, "Assets must be greater than zero");
         require(receiver != address(0), "Invalid receiver");
         require(!emergencyShutdown, "Withdrawals suspended");
         require(msg.sender == _owner, "Not authorized");
 
-        uint256 depositTime = depositTimestamps[_owner];
-        bool isLocked = block.timestamp < depositTime + LOCK_PERIOD;
-
-        // Calculate withdrawable amount
+        // Calculate withdrawable amount based on matured deposits only
         uint256 totalBalance = convertToAssets(balances[_owner]);
-        uint256 withdrawableAmount = isLocked
-            ? (totalBalance * LIQUID_PORTION) / 100
-            : totalBalance;
+        uint256 withdrawableAmount = 0;
 
+        // Only count deposits that have completed their lock period
+        for (uint256 i = 0; i < userStakedDeposits[_owner].length; i++) {
+            if (
+                block.timestamp >=
+                userStakedDeposits[_owner][i].timestamp + LOCK_PERIOD
+            ) {
+                withdrawableAmount += userStakedDeposits[_owner][i].amount;
+            }
+        }
+
+        // Ensure user isn't withdrawing more than their mature deposits
         require(
             assets <= withdrawableAmount,
-            "Amount exceeds withdrawable balance"
+            "Amount exceeds unlocked balance"
         );
 
+        // Also verify they have sufficient total balance
+        require(assets <= totalBalance, "Amount exceeds total balance");
+
+        // Calculate shares to burn
         shares = previewWithdraw(assets);
         require(shares <= balances[_owner], "Insufficient shares");
 
@@ -611,55 +710,6 @@ contract Yield_Bull is ReentrancyGuard {
 
         emit Withdraw(msg.sender, receiver, _owner, assets, shares);
         return shares;
-    }
-
-    function initiateAutomaticWithdrawal(address user) internal {
-        require(
-            block.timestamp >= depositTimestamps[user] + LOCK_PERIOD,
-            "Lock period not ended"
-        );
-        require(userWstETHBalance[user] > 0, "No wstETH to withdraw");
-        require(!withdrawalInProgress[user], "Withdrawal already in progress");
-
-        uint256 totalWstETHToWithdraw = 0;
-        uint256 totalAmountWithdrawn = 0;
-
-        for (uint256 i = 0; i < userStakedDeposits[user].length; i++) {
-            if (
-                !userStakedDeposits[user][i].withdrawn &&
-                block.timestamp >=
-                userStakedDeposits[user][i].timestamp + LOCK_PERIOD
-            ) {
-                totalWstETHToWithdraw += userStakedDeposits[user][i]
-                    .wstETHAmount;
-                totalAmountWithdrawn += userStakedDeposits[user][i].amount;
-                userStakedDeposits[user][i].withdrawn = true;
-            }
-        }
-
-        // Only proceed if there's something to withdraw
-        require(totalWstETHToWithdraw > 0, "No eligible deposits to withdraw");
-
-        uint256 wstETHAmount = totalWstETHToWithdraw;
-        withdrawalInProgress[user] = true;
-
-        // First unwrap wstETH to stETH
-        IWstETH(wstETHAddress).approve(
-            lidoWithdrawalAddress,
-            totalWstETHToWithdraw
-        );
-        uint256 stETHAmount = IWstETH(wstETHAddress).unwrap(
-            totalWstETHToWithdraw
-        );
-
-        // Request withdrawal from Lido
-        uint256[] memory amounts = new uint256[](1);
-        amounts[0] = stETHAmount;
-        uint256[] memory requestIds = ILidoWithdrawal(lidoWithdrawalAddress)
-            .requestWithdrawals(amounts, address(this));
-
-        withdrawalRequestIds[user] = requestIds[0];
-        emit WithdrawalFromLidoInitiated(user, wstETHAmount);
     }
 
     function getWithdrawalStatus(
