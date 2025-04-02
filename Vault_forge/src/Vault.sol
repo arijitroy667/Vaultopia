@@ -34,7 +34,15 @@ interface IWstETH {
 }
 
 interface IReceiver {
-    function _stakeWithLido() external payable returns (uint256);
+    function batchStakeWithLido(
+        bytes32 batchId
+    ) external payable returns (uint256);
+
+    function claimWithdrawalFromLido(
+        uint256 requestId,
+        address user,
+        uint256 minUSDCExpected
+    ) external returns (uint256);
 }
 
 // Call the function that both takes the USDC and performs the swap
@@ -49,6 +57,10 @@ interface ISwapContract {
     function swapAllETHForUSDC(
         uint256 minUSDCAmount
     ) external returns (uint256);
+
+    function getExpectedEthForUsdc(
+        uint256 usdcAmount
+    ) external view returns (uint256);
 }
 
 contract Yield_Bull is ReentrancyGuard {
@@ -164,7 +176,6 @@ contract Yield_Bull is ReentrancyGuard {
     event LidoWithdrawalCompleted(address indexed user, uint256 ethReceived);
     event FeesCollected(uint256 amount);
     event StakedAssetsReturned(address indexed user, uint256 usdcReceived);
-    event DailyUpdatePerformed(uint256 timestamp);
     event StakeInitiated(
         address indexed user,
         uint256 amount,
@@ -177,6 +188,14 @@ contract Yield_Bull is ReentrancyGuard {
         uint256 fee,
         uint256 sharesMinted
     );
+    event WithdrawalInitiationFailed(address indexed user);
+    event WithdrawalProcessingFailed(address indexed user, uint256 requestId);
+    event DailyUpdatePartial(
+        uint256 startIndex,
+        uint256 endIndex,
+        uint256 totalUsers
+    );
+    event DailyUpdatePerformed(uint256 timestamp);
 
     error NoWithdrawalInProgress();
     error WithdrawalNotReady();
@@ -338,6 +357,26 @@ contract Yield_Bull is ReentrancyGuard {
         emit LidoWithdrawalCompleted(user, 0); // ETH was received by Receiver
 
         return (sharesMinted, userAmount);
+    }
+
+    function safeProcessCompletedWithdrawal(
+        address user
+    ) external onlyContract returns (bool) {
+        // Calculate withdrawn amount
+        uint256 withdrawnAmount = 0;
+        for (uint256 i = 0; i < userStakedDeposits[user].length; i++) {
+            if (userStakedDeposits[user][i].withdrawn) {
+                withdrawnAmount += userStakedDeposits[user][i].amount;
+            }
+        }
+
+        // Calculate minimum expected USDC with slippage protection
+        uint256 minExpectedUSDC = (withdrawnAmount * AUTO_WITHDRAWAL_SLIPPAGE) /
+            1000;
+
+        // Process the withdrawal by calling your existing function
+        processCompletedWithdrawals(user, minExpectedUSDC);
+        return true;
     }
 
     function performDailyUpdate() external nonReentrant onlyContract {

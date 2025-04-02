@@ -54,12 +54,6 @@ contract SwapContract {
         receiverContract = _receiverContract;
     }
 
-    /**
-     * @notice Swaps 40% of USDC in the contract for ETH and sends ETH to Receiver
-     * @param amountOutMin Minimum amount of ETH expected from the swap
-     * @return amountOut The amount of ETH sent to the receiver
-     */
-    // New function in Swap contract that swaps ALL USDC
     function takeAndSwapUSDC(
         uint256 amount,
         uint256 amountOutMin
@@ -123,11 +117,6 @@ contract SwapContract {
         }
     }
 
-    /**
-     * @notice Swaps all ETH in the contract for USDC and sends USDC to the Vault
-     * @param amountOutMin Minimum amount of USDC expected from the swap
-     * @return amountOut The amount of USDC sent to the vault
-     */
     function swapAllETHForUSDC(
         uint256 amountOutMin
     ) external returns (uint256 amountOut) {
@@ -162,10 +151,6 @@ contract SwapContract {
         return amountOut;
     }
 
-    /**
-     * @notice Allows the vault to send USDC to this contract for future swaps
-     * @param amount Amount of USDC to deposit
-     */
     function depositUSDC(uint256 amount) external {
         require(msg.sender == vaultContract, "Only vault can deposit");
         require(amount > 0, "Amount must be greater than 0");
@@ -174,24 +159,15 @@ contract SwapContract {
         require(success, "USDC transfer failed");
     }
 
-    /**
-     * @notice Allows the receiver to send ETH to this contract for future swaps
-     */
     function depositETH() external payable {
         require(msg.sender == receiverContract, "Only receiver can deposit");
         require(msg.value > 0, "Must send ETH");
     }
 
-    /**
-     * @notice Gets the current USDC balance of this contract
-     */
     function getUSDCBalance() external view returns (uint256) {
         return USDC.balanceOf(address(this));
     }
 
-    /**
-     * @notice Gets the current ETH balance of this contract
-     */
     function getETHBalance() external view returns (uint256) {
         return address(this).balance;
     }

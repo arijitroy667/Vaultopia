@@ -68,6 +68,12 @@ contract Receiver {
         uint256 ethReceived,
         uint256 usdcReceived
     );
+    event ReceivedETHAndStaked(address indexed sender, uint256 amount);
+    event BatchProcessed(
+        bytes32 indexed batchId,
+        uint256 ethAmount,
+        uint256 wstETHReceived
+    );
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Caller is not the owner");
