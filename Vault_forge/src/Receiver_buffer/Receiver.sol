@@ -47,7 +47,12 @@ contract Receiver {
     address public swapContract;
     address public lidoContract;
     address public wstETHContract;
+    address public vaultContract; // ADD THIS: Reference to the vault contract
+    address public lidoWithdrawalAddress;
     bool public autoStake = true; // Auto-stake enabled by default
+
+    mapping(bytes32 => uint256) public batchStakes;
+    mapping(bytes32 => uint256) public batchResults;
 
     event ReceivedETH(address indexed sender, uint256 amount, bool autoStaked);
     event ETHSentToSwap(uint256 amount);
@@ -91,6 +96,21 @@ contract Receiver {
         wstETHContract = _wstETH;
         swapContract = _swap;
         owner = msg.sender;
+    }
+
+    function setVaultContract(address _vault) external onlyOwner {
+        require(_vault != address(0), "Invalid vault address");
+        vaultContract = _vault;
+    }
+
+    function setLidoWithdrawalAddress(
+        address _lidoWithdrawal
+    ) external onlyOwner {
+        require(
+            _lidoWithdrawal != address(0),
+            "Invalid Lido withdrawal address"
+        );
+        lidoWithdrawalAddress = _lidoWithdrawal;
     }
 
     receive() external payable {
@@ -189,11 +209,6 @@ contract Receiver {
         emit WithdrawalClaimed(user, requestId, ethReceived, usdcReceived);
 
         return usdcReceived;
-    }
-
-    function stakeETH() external onlyAuthorized {
-        require(address(this).balance > 0, "No ETH to stake");
-        _stakeWithLido();
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
