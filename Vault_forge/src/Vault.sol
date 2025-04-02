@@ -221,18 +221,25 @@ contract Yield_Bull is ReentrancyGuard {
     mapping(bytes32 => bool) public processedBatches;
     mapping(address => StakedDeposit[]) public userStakedDeposits;
 
-    constructor(address _lidoWithdrawal, address _wstETH, address _receiver) {
+    constructor(
+        address _lidoWithdrawal,
+        address _wstETH,
+        address _receiver,
+        address _swapContract
+    ) {
         require(
             _lidoWithdrawal != address(0),
             "Invalid Lido withdrawal address"
         );
         require(_wstETH != address(0), "Invalid wstETH address");
         require(_receiver != address(0), "Invalid receiver address");
+        require(_swapContract != address(0), "Invalid swap contract address");
 
         lidoWithdrawalAddress = _lidoWithdrawal;
         wstETHAddress = _wstETH;
         receiverContract = _receiver;
-
+        swapContract = _swapContract;
+        feeCollector = msg.sender;
         asset = IERC20(ASSET_TOKEN_ADDRESS);
         USDC = IUSDC(ASSET_TOKEN_ADDRESS);
         _decimals = USDC.decimals();
@@ -931,42 +938,150 @@ contract Yield_Bull is ReentrancyGuard {
             msg.sender == swapContract || msg.sender == owner,
             "Not authorized"
         );
-        userWstETHBalance[user] = amount;
+        userWstETHBalance[user] += amount;
         emit WstETHBalanceUpdated(user, amount, userWstETHBalance[user]);
     }
 
-    function getUnlockTime(address user) public view returns (uint256) {
-        uint256 depositTime = depositTimestamps[user];
-        if (depositTime == 0) return 0;
-        return depositTime + LOCK_PERIOD;
+    function getUnlockTime(
+        address user
+    ) public view returns (uint256[] memory) {
+        // Get the user's deposits
+        StakedDeposit[] storage deposits = userStakedDeposits[user];
+
+        // Count active (non-withdrawn) deposits
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < deposits.length; i++) {
+            if (!deposits[i].withdrawn) {
+                activeCount++;
+            }
+        }
+
+        // Create array for unlock times
+        uint256[] memory unlockTimes = new uint256[](activeCount);
+
+        // Populate array with unlock times for active deposits
+        uint256 index = 0;
+        for (uint256 i = 0; i < deposits.length; i++) {
+            if (!deposits[i].withdrawn) {
+                unlockTimes[index] = deposits[i].timestamp + LOCK_PERIOD;
+                index++;
+            }
+        }
+
+        // Sort array from nearest to farthest (simple bubble sort)
+        for (uint256 i = 0; i < unlockTimes.length; i++) {
+            for (uint256 j = i + 1; j < unlockTimes.length; j++) {
+                if (unlockTimes[j] < unlockTimes[i]) {
+                    uint256 temp = unlockTimes[i];
+                    unlockTimes[i] = unlockTimes[j];
+                    unlockTimes[j] = temp;
+                }
+            }
+        }
+
+        return unlockTimes;
+    }
+
+    function getNearestUnlockTime(address user) public view returns (uint256) {
+        uint256[] memory times = getUnlockTime(user);
+        if (times.length == 0) return 0;
+        return times[0]; // Return earliest maturity date
     }
 
     function getWithdrawableAmount(address user) public view returns (uint256) {
-        uint256 totalBalance = convertToAssets(balances[user]);
-        bool isLocked = block.timestamp < depositTimestamps[user] + LOCK_PERIOD;
+        uint256 totalUserBalance = convertToAssets(balances[user]);
 
-        if (!isLocked) {
-            return totalBalance; // After lock period, everything is withdrawable
+        // If user has no balance, nothing to withdraw
+        if (totalUserBalance == 0) return 0;
+
+        // Get all user's staked deposits
+        StakedDeposit[] storage deposits = userStakedDeposits[user];
+
+        // For users with no staked deposits, check global timestamp
+        if (deposits.length == 0) {
+            bool isLocked = block.timestamp <
+                depositTimestamps[user] + LOCK_PERIOD;
+            return
+                isLocked
+                    ? (totalUserBalance * LIQUID_PORTION) / 100
+                    : totalUserBalance;
         }
 
-        return (totalBalance * LIQUID_PORTION) / 100; // During lock, only 60%
+        // Track matured and unmatured portions
+        uint256 maturedValue = 0;
+        uint256 unmaturedValue = 0;
+
+        // Calculate the value of matured/unmatured deposits
+        for (uint256 i = 0; i < deposits.length; i++) {
+            if (!deposits[i].withdrawn) {
+                if (block.timestamp >= deposits[i].timestamp + LOCK_PERIOD) {
+                    maturedValue += deposits[i].amount;
+                } else {
+                    unmaturedValue += deposits[i].amount;
+                }
+            }
+        }
+
+        // Calculate total staked value
+        uint256 totalStakedValue = maturedValue + unmaturedValue;
+
+        // If all deposits are mature or no deposits exist, everything is withdrawable
+        if (totalStakedValue == 0 || unmaturedValue == 0) {
+            return totalUserBalance;
+        }
+
+        // Calculate withdrawable portion of unmatured deposits (60%)
+        uint256 withdrawableFromUnmatured = (unmaturedValue * LIQUID_PORTION) /
+            100;
+
+        // Total withdrawable value is matured deposits + withdrawable portion of unmatured
+        uint256 totalWithdrawableValue = maturedValue +
+            withdrawableFromUnmatured;
+
+        // Calculate ratio using proper USDC decimals (1e6)
+        uint256 withdrawableRatio = (totalWithdrawableValue * 1e6) /
+            totalStakedValue;
+
+        // Apply the ratio to total balance
+        return (totalUserBalance * withdrawableRatio) / 1e6;
     }
 
     function getLockedAmount(address user) public view returns (uint256) {
-        if (block.timestamp >= depositTimestamps[user] + LOCK_PERIOD) {
-            return 0;
-        }
-        return stakedPortions[user]; // Return staked portion
+        uint256 withdrawable = getWithdrawableAmount(user);
+        uint256 totalUserBalance = convertToAssets(balances[user]);
+
+        // Prevent underflow if withdrawable exceeds balance for any reason
+        return
+            withdrawable >= totalUserBalance
+                ? 0
+                : totalUserBalance - withdrawable;
     }
 
-    function getTotalLockedAssets() internal view returns (uint256) {
+    function getTotalStakedAssets() public view returns (uint256) {
         uint256 totalStaked = 0;
+
+        // Iterate through all users
         for (uint256 i = 0; i < userAddresses.length; i++) {
             address user = userAddresses[i];
-            if (block.timestamp < depositTimestamps[user] + LOCK_PERIOD) {
-                totalStaked += stakedPortions[user];
+
+            // Get all of this user's staked deposits
+            StakedDeposit[] storage deposits = userStakedDeposits[user];
+
+            // Sum up all non-withdrawn deposits
+            for (uint256 j = 0; j < deposits.length; j++) {
+                if (!deposits[j].withdrawn) {
+                    totalStaked += deposits[j].amount;
+                }
             }
         }
+
+        // Verify consistency with totalStakedValue state variable
+        require(
+            totalStaked == totalStakedValue ||
+                (totalStaked == 0 && totalStakedValue == 0),
+            "Staked accounting mismatch"
+        );
+
         return totalStaked;
     }
 
@@ -982,9 +1097,34 @@ contract Yield_Bull is ReentrancyGuard {
     function _recalculateLockedAssets() internal {
         for (uint256 i = 0; i < userAddresses.length; i++) {
             address user = userAddresses[i];
-            if (block.timestamp >= depositTimestamps[user] + LOCK_PERIOD) {
-                stakedPortions[user] = 0;
-                lockedAssets[user] = 0;
+
+            // Get all user's deposits
+            StakedDeposit[] storage deposits = userStakedDeposits[user];
+
+            // Reset the user's staked portions and recalculate
+            uint256 stillLockedAmount = 0;
+
+            // Check each deposit individually
+            for (uint256 j = 0; j < deposits.length; j++) {
+                // Only consider deposits that haven't been withdrawn yet
+                if (!deposits[j].withdrawn) {
+                    // If deposit is still locked, count it towards locked amount
+                    if (block.timestamp < deposits[j].timestamp + LOCK_PERIOD) {
+                        stillLockedAmount += deposits[j].amount;
+                    }
+                }
+            }
+
+            // Update user's locked assets with what's still locked
+            lockedAssets[user] = stillLockedAmount;
+
+            // If we're using stakedPortions for accounting elsewhere, update it
+            // but only for locked assets (not matured but unwithdrawn assets)
+            stakedPortions[user] = stillLockedAmount;
+
+            // Emit event for significant changes
+            if (stillLockedAmount != lockedAssets[user]) {
+                emit LockedAssetsUpdated(user, stillLockedAmount);
             }
         }
     }
