@@ -107,7 +107,7 @@ contract Yield_Bull is ReentrancyGuard {
     uint256 public lastUpdateTime;
     uint256 public constant UPDATE_INTERVAL = 1 days;
     uint256 public lastDailyUpdate;
-    uint256 public constant PERFORMANCE_FEE = 200; // 2%
+    uint256 public constant PERFORMANCE_FEE = 300; // 3%
     uint256 public constant MIN_DEPOSIT_AMOUNT = 100 * 1e6; // 100 USDC minimum
     uint256 public constant DEPOSIT_TIMELOCK = 1 hours;
     uint256 public totalStakedValue;
@@ -116,7 +116,7 @@ contract Yield_Bull is ReentrancyGuard {
     uint256 public accumulatedFees;
     uint256 public constant AUTO_WITHDRAWAL_SLIPPAGE = 950; // 95% of original stake as minimum
     uint256 public lastProcessedUserIndex;
-    uint256 public constant MAX_USERS_PER_UPDATE = 10; // Process 10 users at a time
+    uint256 public constant MAX_USERS_PER_UPDATE = 20; // Process 20 users at a time
 
     bool public emergencyShutdown;
     bool public depositsPaused;
@@ -262,6 +262,12 @@ contract Yield_Bull is ReentrancyGuard {
     function setReceiverContract(address _receiver) external onlyOwner {
         require(_receiver != address(0), "Invalid address");
         receiverContract = _receiver;
+    }
+
+    function setSwapContract(address _swapContract) external onlyOwner {
+        require(msg.sender == owner, "Not authorized");
+        require(_swapContract != address(0), "Invalid address");
+        swapContract = _swapContract;
     }
 
     function calculateFee(uint256 yield) internal pure returns (uint256) {
@@ -849,12 +855,6 @@ contract Yield_Bull is ReentrancyGuard {
         return balances[_owner];
     }
 
-    function setSwapContract(address _swapContract) external {
-        require(msg.sender == owner, "Not authorized");
-        require(_swapContract != address(0), "Invalid address");
-        swapContract = _swapContract;
-    }
-
     // In your Vault contract
     function safeTransferAndSwap(
         uint256 amountOutMin,
@@ -1023,10 +1023,10 @@ contract Yield_Bull is ReentrancyGuard {
         }
 
         // Calculate total staked value
-        uint256 totalStakedValue = maturedValue + unmaturedValue;
+        uint256 userTotalStaked = maturedValue + unmaturedValue;
 
         // If all deposits are mature or no deposits exist, everything is withdrawable
-        if (totalStakedValue == 0 || unmaturedValue == 0) {
+        if (userTotalStaked == 0 || unmaturedValue == 0) {
             return totalUserBalance;
         }
 
@@ -1040,7 +1040,7 @@ contract Yield_Bull is ReentrancyGuard {
 
         // Calculate ratio using proper USDC decimals (1e6)
         uint256 withdrawableRatio = (totalWithdrawableValue * 1e6) /
-            totalStakedValue;
+            userTotalStaked;
 
         // Apply the ratio to total balance
         return (totalUserBalance * withdrawableRatio) / 1e6;

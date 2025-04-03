@@ -1,0 +1,10 @@
+{
+    "Holesky": {
+      "lidoAddress": "0x...",
+      "wstETHAddress": "0x...",
+      "lidoWithdrawalAddress": "0x...",
+      "usdcAddress": "0x...",
+      "wethAddress": "0x...",
+      "uniswapRouterAddress": "0x..."
+    }
+  }
