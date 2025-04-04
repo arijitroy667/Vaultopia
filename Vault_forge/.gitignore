@@ -13,9 +13,7 @@ docs/
 # Dotenv file
 .env
 
-src/*.sol
-src/Receiver_buffer/*.sol
-src/Swap_tokens/*.sol
+
 
 
 
