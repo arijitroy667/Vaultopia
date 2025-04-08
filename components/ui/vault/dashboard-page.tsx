@@ -22,7 +22,7 @@ export function DashboardPage() {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="container flex h-16 items-center justify-between py-4">
-          <h1 className="text-2xl font-bold">DeFi Vault</h1>
+          <h1 className="text-2xl font-bold">Vaultopia</h1>
           <WalletConnect />
         </div>
       </header>
