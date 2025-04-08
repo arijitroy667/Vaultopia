@@ -22,7 +22,9 @@ export function DashboardPage() {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="container flex h-16 items-center justify-between py-4">
-          <h1 className="text-2xl font-bold">Vaultopia</h1>
+        <h1 className="text-2xl font-bold bg-gradient-to-r from-green-400 to-orange-500 bg-clip-text text-transparent">
+          Vaultopia
+            </h1>
           <WalletConnect />
         </div>
       </header>
