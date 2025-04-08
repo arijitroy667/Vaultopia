@@ -12,6 +12,7 @@ import { TransactionHistory } from "@/components/ui/vault/transaction-history"
 import { AdminPanel } from "@/components/ui/vault/admin-panel"
 import { useWallet } from "@/context/wallet-context"
 import { useVault } from "@/context/vault-context"
+import { Button } from "@/components/ui/button"
 
 export function DashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard")
@@ -20,13 +21,32 @@ export function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <div className="container flex h-16 items-center justify-between py-4">
-        <h1 className="text-2xl font-bold bg-gradient-to-r from-green-400 to-orange-500 bg-clip-text text-transparent">
-          Vaultopia
-            </h1>
-          <WalletConnect />
-        </div>
+      <header className="mt-10 ml-8 mr-8">
+      <nav className="flex justify-between items-center mb-6">
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5 }}
+            className="flex items-center gap-2"
+          >
+            <div className="w-10 h-10 rounded-full bg-gradient-to-r from-[#f9389f] to-cyan-400 flex items-center justify-center">
+              <Lock className="w-5 h-5 text-white" />
+            </div>
+            <span className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-fuchsia-500">
+              Vaultopia
+            </span>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+          >
+            <Button variant="outline" className="border-cyan-500/50 text-cyan-500 hover:bg-cyan-950/30 border-cyan-500">
+              Documentation
+            </Button>
+          </motion.div>
+        </nav>
       </header>
       <main className="container py-6">
         {isConnected ? (
