@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "./MathLib.sol";
 
 // Add USDC interface
 interface IUSDC is IERC20 {
@@ -47,26 +48,213 @@ interface IReceiver {
 
 // Call the function that both takes the USDC and performs the swap
 interface ISwapContract {
-    function takeAndSwapUSDC(
-        uint256 amount,
-        uint256 amountOutMin
-    ) external returns (uint256);
+    // Convert USDC to ETH with slippage protection and destination address
+    function swapExactUSDCForETH(
+        uint amountIn,
+        uint amountOutMin,
+        address to,
+        uint deadline
+    ) external returns (uint amountOut);
 
-    function depositETH() external payable;
+    // Convert ETH to USDC with slippage protection and destination address
+    function swapExactETHForUSDC(
+        uint amountOutMin,
+        address to,
+        uint deadline
+    ) external payable returns (uint amountOut);
 
-    function swapAllETHForUSDC(
-        uint256 minUSDCAmount
-    ) external returns (uint256);
+    // Get quote for ETH amount from USDC input
+    function getETHAmountOut(
+        uint usdcAmountIn
+    ) external view returns (uint ethAmountOut);
 
-    function getExpectedEthForUsdc(
-        uint256 usdcAmount
-    ) external view returns (uint256);
+    // Get quote for USDC amount from ETH input
+    function getUSDCAmountOut(
+        uint ethAmountIn
+    ) external view returns (uint usdcAmountOut);
 }
+
+contract BaseVault is ReentrancyGuard {
+    function maxDeposit(
+        address receiver
+    ) public view returns (uint256 maxAssets) {
+        uint256 deposited = userDeposits[receiver];
+        return
+            deposited >= MAX_DEPOSIT_PER_USER
+                ? 0
+                : MAX_DEPOSIT_PER_USER - deposited;
+    }
+
+    function previewDeposit(
+        uint256 assets
+    ) public view returns (uint256 shares) {
+        require(assets > 0, "Deposit amount must be greater than zero");
+        return convertToShares(assets);
+    }
+
+    function deposit(
+        uint256 assets,
+        address receiver
+    ) public nonReentrant returns (uint256 shares) {
+        require(assets > 0, "Deposit amount must be greater than zero");
+        require(!depositsPaused, "Deposits are paused");
+        require(assets >= MIN_DEPOSIT_AMOUNT, "Deposit amount too small");
+        require(!emergencyShutdown, "Deposits suspended");
+
+        shares = previewDeposit(assets);
+        require(shares > 0, "Zero shares minted");
+
+        if (assets > totalAssets / 10) {
+            // If deposit is > 10% of total assets
+            require(
+                largeDepositUnlockTime[msg.sender] != 0 &&
+                    block.timestamp >= largeDepositUnlockTime[msg.sender],
+                "Large deposit must be queued"
+            );
+            delete largeDepositUnlockTime[msg.sender];
+        }
+
+        if (!isExistingUser[receiver]) {
+            userAddresses.push(receiver);
+            isExistingUser[receiver] = true;
+        }
+
+        // Calculate portions
+        uint256 amountToStake = (assets * STAKED_PORTION) / 100;
+
+        // Get expected ETH output with 1% slippage tolerance
+        uint256 expectedEth = ISwapContract(swapContract).getETHAmountOut(
+            amountToStake
+        );
+        uint256 minExpectedEth = (expectedEth * 99) / 100;
+
+        // Update state
+        userDeposits[receiver] += assets;
+        balances[receiver] += shares;
+        totalAssets += assets;
+        totalShares += shares;
+        depositTimestamps[receiver] = block.timestamp;
+
+        // Transfer assets from user to vault
+        asset.safeTransferFrom(msg.sender, address(this), assets);
+
+        // Automatically initiate staking for 40%
+        if (amountToStake > 0) {
+            safeTransferAndSwap(minExpectedEth, receiver, amountToStake);
+        }
+
+        emit Deposit(msg.sender, receiver, assets, shares);
+        emit StakeInitiated(
+            receiver,
+            amountToStake,
+            block.timestamp + LOCK_PERIOD
+        );
+
+        return shares;
+    }
+
+    function queueLargeDeposit() external {
+        require(
+            largeDepositUnlockTime[msg.sender] == 0,
+            "Deposit already queued"
+        );
+        largeDepositUnlockTime[msg.sender] = block.timestamp + DEPOSIT_TIMELOCK;
+    }
+
+    function toggleDeposits() external {
+        require(msg.sender == owner, "Not authorized");
+        depositsPaused = !depositsPaused;
+    }
+
+    function maxWithdraw(
+        address _owner
+    ) public view returns (uint256 maxAssets) {
+        uint256 totalUserAssets = convertToAssets(balances[_owner]);
+
+        // Check if ANY deposits are unlocked
+        bool hasUnlockedDeposits = false;
+        for (uint256 i = 0; i < userStakedDeposits[_owner].length; i++) {
+            if (
+                block.timestamp >=
+                userStakedDeposits[_owner][i].timestamp + LOCK_PERIOD
+            ) {
+                hasUnlockedDeposits = true;
+                break;
+            }
+        }
+
+        if (!hasUnlockedDeposits) {
+            return (totalAssets * INSTANT_WITHDRAWAL_LIMIT) / 100;
+        }
+        return totalUserAssets;
+    }
+
+    function previewWithdraw(
+        uint256 assets
+    ) public view returns (uint256 shares) {
+        require(assets > 0, "Assets must be greater than zero");
+        shares = convertToShares(assets);
+        return shares > 0 ? shares : 1; // Ensure at least 1 share is burned
+    }
+
+    function withdraw(
+        uint256 assets,
+        address receiver,
+        address _owner
+    ) public nonReentrant returns (uint256 shares) {
+        // Basic validations
+        require(assets > 0, "Assets must be greater than zero");
+        require(receiver != address(0), "Invalid receiver");
+        require(!emergencyShutdown, "Withdrawals suspended");
+        require(msg.sender == _owner, "Not authorized");
+
+        // Calculate withdrawable amount based on matured deposits only
+        uint256 totalBalance = convertToAssets(balances[_owner]);
+        uint256 withdrawableAmount = 0;
+
+        // Only count deposits that have completed their lock period
+        for (uint256 i = 0; i < userStakedDeposits[_owner].length; i++) {
+            if (
+                block.timestamp >=
+                userStakedDeposits[_owner][i].timestamp + LOCK_PERIOD
+            ) {
+                withdrawableAmount += userStakedDeposits[_owner][i].amount;
+            }
+        }
+
+        // Ensure user isn't withdrawing more than their mature deposits
+        require(
+            assets <= withdrawableAmount,
+            "Amount exceeds unlocked balance"
+        );
+
+        // Also verify they have sufficient total balance
+        require(assets <= totalBalance, "Amount exceeds total balance");
+
+        // Calculate shares to burn
+        shares = previewWithdraw(assets);
+        require(shares <= balances[_owner], "Insufficient shares");
+
+        // Update state
+        balances[_owner] -= shares;
+        totalShares -= shares;
+        totalAssets -= assets;
+
+        // Transfer assets
+        asset.safeTransfer(receiver, assets);
+
+        emit Withdraw(msg.sender, receiver, _owner, assets, shares);
+        return shares;
+    }
+}
+
+contract StakingController {}
 
 contract Yield_Bull is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using SafeMath for uint256;
+    using MathLib for uint256;
 
     modifier onlyContract() {
         require(msg.sender == address(this), "Only contract can call");
@@ -535,235 +723,6 @@ contract Yield_Bull is ReentrancyGuard {
         pendingOperations[operationId] = block.timestamp + TIMELOCK_DURATION;
     }
 
-    function convertToShares(
-        uint256 assets
-    ) public view returns (uint256 shares) {
-        if (totalAssets == 0 || totalShares == 0) {
-            return assets; // Initial conversion: 1:1
-        }
-
-        // Calculate based on current exchange rate
-        uint256 currentRate = exchangeRate();
-        shares = (assets * 1e6) / currentRate;
-
-        // Round down to prevent share inflation
-        return shares;
-    }
-
-    function convertToAssets(
-        uint256 shares
-    ) public view returns (uint256 assets) {
-        if (totalShares == 0) {
-            return shares; // Initial conversion: 1:1
-        }
-        return (shares * totalAssets) / totalShares;
-    }
-
-    function maxDeposit(
-        address receiver
-    ) public view returns (uint256 maxAssets) {
-        uint256 deposited = userDeposits[receiver];
-        return
-            deposited >= MAX_DEPOSIT_PER_USER
-                ? 0
-                : MAX_DEPOSIT_PER_USER - deposited;
-    }
-
-    function previewDeposit(
-        uint256 assets
-    ) public view returns (uint256 shares) {
-        require(assets > 0, "Deposit amount must be greater than zero");
-        return convertToShares(assets);
-    }
-
-    function deposit(
-        uint256 assets,
-        address receiver
-    ) public nonReentrant returns (uint256 shares) {
-        require(assets > 0, "Deposit amount must be greater than zero");
-        require(!depositsPaused, "Deposits are paused");
-        require(assets >= MIN_DEPOSIT_AMOUNT, "Deposit amount too small");
-        require(!emergencyShutdown, "Deposits suspended");
-
-        shares = previewDeposit(assets);
-        require(shares > 0, "Zero shares minted");
-
-        if (assets > totalAssets / 10) {
-            // If deposit is > 10% of total assets
-            require(
-                largeDepositUnlockTime[msg.sender] != 0 &&
-                    block.timestamp >= largeDepositUnlockTime[msg.sender],
-                "Large deposit must be queued"
-            );
-            delete largeDepositUnlockTime[msg.sender];
-        }
-
-        if (!isExistingUser[receiver]) {
-            userAddresses.push(receiver);
-            isExistingUser[receiver] = true;
-        }
-
-        // Calculate portions
-        uint256 amountToStake = (assets * STAKED_PORTION) / 100;
-
-        // Get expected ETH output with 1% slippage tolerance
-        uint256 expectedEth = ISwapContract(swapContract).getExpectedEthForUsdc(
-            amountToStake
-        );
-        uint256 minExpectedEth = (expectedEth * 99) / 100;
-
-        // Update state
-        userDeposits[receiver] += assets;
-        balances[receiver] += shares;
-        totalAssets += assets;
-        totalShares += shares;
-        depositTimestamps[receiver] = block.timestamp;
-
-        // Transfer assets from user to vault
-        asset.safeTransferFrom(msg.sender, address(this), assets);
-
-        // Automatically initiate staking for 40%
-        if (amountToStake > 0) {
-            safeTransferAndSwap(minExpectedEth, receiver, amountToStake); // Will handle the 40% staking
-        }
-
-        emit Deposit(msg.sender, receiver, assets, shares);
-        emit StakeInitiated(
-            receiver,
-            amountToStake,
-            block.timestamp + LOCK_PERIOD
-        );
-
-        return shares;
-    }
-
-    function queueLargeDeposit() external {
-        require(
-            largeDepositUnlockTime[msg.sender] == 0,
-            "Deposit already queued"
-        );
-        largeDepositUnlockTime[msg.sender] = block.timestamp + DEPOSIT_TIMELOCK;
-    }
-
-    function toggleDeposits() external {
-        require(msg.sender == owner, "Not authorized");
-        depositsPaused = !depositsPaused;
-    }
-
-    function maxMint(address receiver) public view returns (uint256 maxShares) {
-        uint256 maxAssets = maxDeposit(receiver);
-        return convertToShares(maxAssets);
-    }
-
-    function previewMint(uint256 shares) public view returns (uint256 assets) {
-        require(shares > 0, "Shares must be greater than zero");
-        return convertToAssets(shares);
-    }
-
-    function mint(
-        uint256 shares,
-        address receiver
-    ) public nonReentrant returns (uint256 assets) {
-        require(shares > 0, "Shares must be greater than zero");
-        require(shares <= maxMint(receiver), "Shares exceed limit");
-
-        assets = previewMint(shares);
-        require(assets > 0, "Zero assets required");
-
-        // Update state
-        userDeposits[receiver] += assets;
-        balances[receiver] += shares;
-        totalAssets += assets;
-        totalShares += shares;
-
-        // Transfer assets from user to vault
-        asset.safeTransferFrom(msg.sender, address(this), assets);
-
-        emit Deposit(msg.sender, receiver, assets, shares);
-        return assets;
-    }
-
-    function maxWithdraw(
-        address _owner
-    ) public view returns (uint256 maxAssets) {
-        uint256 totalUserAssets = convertToAssets(balances[_owner]);
-
-        // Check if ANY deposits are unlocked
-        bool hasUnlockedDeposits = false;
-        for (uint256 i = 0; i < userStakedDeposits[_owner].length; i++) {
-            if (
-                block.timestamp >=
-                userStakedDeposits[_owner][i].timestamp + LOCK_PERIOD
-            ) {
-                hasUnlockedDeposits = true;
-                break;
-            }
-        }
-
-        if (!hasUnlockedDeposits) {
-            return (totalAssets * INSTANT_WITHDRAWAL_LIMIT) / 100;
-        }
-        return totalUserAssets;
-    }
-
-    function previewWithdraw(
-        uint256 assets
-    ) public view returns (uint256 shares) {
-        require(assets > 0, "Assets must be greater than zero");
-        shares = convertToShares(assets);
-        return shares > 0 ? shares : 1; // Ensure at least 1 share is burned
-    }
-
-    function withdraw(
-        uint256 assets,
-        address receiver,
-        address _owner
-    ) public nonReentrant returns (uint256 shares) {
-        // Basic validations
-        require(assets > 0, "Assets must be greater than zero");
-        require(receiver != address(0), "Invalid receiver");
-        require(!emergencyShutdown, "Withdrawals suspended");
-        require(msg.sender == _owner, "Not authorized");
-
-        // Calculate withdrawable amount based on matured deposits only
-        uint256 totalBalance = convertToAssets(balances[_owner]);
-        uint256 withdrawableAmount = 0;
-
-        // Only count deposits that have completed their lock period
-        for (uint256 i = 0; i < userStakedDeposits[_owner].length; i++) {
-            if (
-                block.timestamp >=
-                userStakedDeposits[_owner][i].timestamp + LOCK_PERIOD
-            ) {
-                withdrawableAmount += userStakedDeposits[_owner][i].amount;
-            }
-        }
-
-        // Ensure user isn't withdrawing more than their mature deposits
-        require(
-            assets <= withdrawableAmount,
-            "Amount exceeds unlocked balance"
-        );
-
-        // Also verify they have sufficient total balance
-        require(assets <= totalBalance, "Amount exceeds total balance");
-
-        // Calculate shares to burn
-        shares = previewWithdraw(assets);
-        require(shares <= balances[_owner], "Insufficient shares");
-
-        // Update state
-        balances[_owner] -= shares;
-        totalShares -= shares;
-        totalAssets -= assets;
-
-        // Transfer assets
-        asset.safeTransfer(receiver, assets);
-
-        emit Withdraw(msg.sender, receiver, _owner, assets, shares);
-        return shares;
-    }
-
     function getWithdrawalStatus(
         address user
     )
@@ -778,73 +737,6 @@ contract Yield_Bull is ReentrancyGuard {
                 requestId
             )
             : false;
-    }
-
-    function maxRedeem(address _owner) public view returns (uint256 maxShares) {
-        return balances[_owner];
-    }
-
-    function previewRedeem(
-        uint256 shares
-    ) public view returns (uint256 assets) {
-        require(shares > 0, "Shares must be greater than zero");
-        assets = convertToAssets(shares);
-        return assets > 0 ? assets : 1; // Ensure at least 1 asset is returned
-    }
-
-    function redeem(
-        uint256 shares,
-        address receiver,
-        address _owner
-    ) public nonReentrant returns (uint256 assets) {
-        require(shares > 0, "Shares must be greater than zero");
-        require(receiver != address(0), "Invalid receiver");
-        require(!emergencyShutdown, "Withdrawals suspended");
-        require(msg.sender == _owner, "Not authorized");
-        require(shares <= balances[_owner], "Insufficient shares");
-
-        // Calculate assets to redeem
-        assets = previewRedeem(shares);
-        require(assets > 0, "Assets must be greater than zero");
-
-        // Check lock period and calculate redeemable amount
-        uint256 depositTime = depositTimestamps[_owner];
-        bool isLocked = block.timestamp < depositTime + LOCK_PERIOD;
-        uint256 totalUserAssets = convertToAssets(balances[_owner]);
-        uint256 redeemableAmount;
-
-        if (isLocked) {
-            // During lock period, only allow redemption up to 60%
-            redeemableAmount = (totalUserAssets * LIQUID_PORTION) / 100;
-            require(
-                assets <= redeemableAmount,
-                "Cannot redeem staked portion during lock period"
-            );
-        } else {
-            // After lock period, allow full redemption
-            redeemableAmount = totalUserAssets;
-            // Reset staked portion if fully redeeming
-            if (assets == totalUserAssets) {
-                stakedPortions[_owner] = 0;
-                userWstETHBalance[_owner] = 0;
-            }
-        }
-
-        require(
-            assets <= redeemableAmount,
-            "Amount exceeds redeemable balance"
-        );
-
-        // Update state before transfer
-        balances[_owner] -= shares;
-        totalShares -= shares;
-        totalAssets -= assets;
-
-        // Transfer assets to receiver
-        asset.safeTransfer(receiver, assets);
-
-        emit Withdraw(msg.sender, receiver, _owner, assets, shares);
-        return assets;
     }
 
     function totalSupply() public view returns (uint256) {
@@ -866,7 +758,6 @@ contract Yield_Bull is ReentrancyGuard {
             msg.sender == owner || msg.sender == address(this),
             "Unauthorized"
         );
-
         require(amountToStake > 0, "Amount too small");
 
         bytes32 batchId = keccak256(
@@ -879,10 +770,21 @@ contract Yield_Bull is ReentrancyGuard {
         // Execute swap for staking
         bool success = USDC.approve(swapContract, amountToStake);
         require(success, "USDC approval failed");
-        uint256 ethReceived = ISwapContract(swapContract).takeAndSwapUSDC(
+
+        // Calculate deadline (5 minutes from now)
+        uint256 deadline = block.timestamp + 300;
+
+        // First transfer USDC to the swap contract
+        USDC.transferFrom(address(this), swapContract, amountToStake);
+
+        // Call the new swap function with receiver contract as the ETH recipient
+        uint256 ethReceived = ISwapContract(swapContract).swapExactUSDCForETH(
             amountToStake,
-            amountOutMin
+            amountOutMin,
+            receiverContract, // Send ETH directly to receiver
+            deadline
         );
+
         require(ethReceived > 0, "No ETH received from swap");
 
         // Store the amount of ETH being sent for this user
@@ -891,15 +793,15 @@ contract Yield_Bull is ReentrancyGuard {
         // Add user to current batch
         stakeBatches[batchId].push(beneficiary);
 
-        // Call receiver with batch ID
+        // Call receiver with batch ID - no need to send ETH as it's already sent by the swap
         uint256 wstETHReceived = IReceiver(receiverContract).batchStakeWithLido{
-            value: ethReceived
-        }(batchId);
+            value: 0
+        }(batchId); // No ETH needed here as it's already sent by the swap
 
         require(!processedBatches[batchId], "Batch already processed");
         processedBatches[batchId] = true;
 
-        // Calculate user's share based on their contribution to the batch
+        // Calculate user's share
         uint256 userShare = wstETHReceived;
         userWstETHBalance[beneficiary] += userShare;
 
@@ -919,15 +821,15 @@ contract Yield_Bull is ReentrancyGuard {
             beneficiary,
             amountToStake,
             block.timestamp + LOCK_PERIOD
-        ); // Record the swap
-        emit WstETHBalanceUpdated(beneficiary, amountToStake, wstETHReceived); // Record wstETH received
+        );
+        emit WstETHBalanceUpdated(beneficiary, amountToStake, wstETHReceived);
         emit StakeInitiated(
             beneficiary,
             amountToStake,
             block.timestamp + LOCK_PERIOD
-        ); // Record lock period start
+        );
 
-        // Reset approval as security measure
+        // Reset approval
         USDC.approve(swapContract, 0);
 
         return userShare;

@@ -1,183 +1,217 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+// // SPDX-License-Identifier: MIT
 
-import "./ISwapRouter.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+// // already deployed in repo- Uniswap-Holesky : UniswapV2Router02.sol
+// pragma solidity =0.5.16;
 
-interface IWETH {
-    function deposit() external payable;
+// import "./interfaces/IUniswapV2Factory.sol";
+// import "./interfaces/IUniswapV2Pair.sol";
+// import "./interfaces/IWETH.sol";
+// import "./interfaces/IERC20.sol";
+// import "./libraries/UniswapV2Library.sol";
+// import "./libraries/TransferHelper.sol";
+// import "./libraries/SafeMath.sol";
 
-    function withdraw(uint256 amount) external;
+// contract USDCETHRouter {
+//     using SafeMath for uint;
 
-    function transfer(
-        address recipient,
-        uint256 amount
-    ) external returns (bool);
+//     address public factory;
+//     address public WETH;
+//     address public USDC;
+//     address public receiverContract;
+//     address public owner;
 
-    function approve(address spender, uint256 amount) external returns (bool);
+//     // Events
+//     event SwappedUSDCForETH(
+//         address indexed user,
+//         uint usdcAmount,
+//         uint ethAmount
+//     );
+//     event SwappedETHForUSDC(
+//         address indexed user,
+//         uint ethAmount,
+//         uint usdcAmount
+//     );
 
-    function balanceOf(address account) external view returns (uint256);
-}
+//     event ReceiverContractUpdated(
+//         address indexed oldReceiver,
+//         address indexed newReceiver
+//     );
 
-contract SwapContract {
-    ISwapRouter public immutable swapRouter;
-    IERC20 public immutable USDC;
-    IWETH public immutable WETH;
+//     modifier ensure(uint deadline) {
+//         require(deadline >= block.timestamp, "USDCETHRouter: EXPIRED");
+//         _;
+//     }
 
-    address public immutable vaultContract;
-    address public immutable receiverContract;
+//     constructor(
+//         address _factory,
+//         address _WETH,
+//         address _USDC,
+//         address _receiverContract
+//     ) public {
+//         require(_factory != address(0), "USDCETHRouter: ZERO_FACTORY");
+//         require(_WETH != address(0), "USDCETHRouter: ZERO_WETH");
+//         require(_USDC != address(0), "USDCETHRouter: ZERO_USDC");
+//         require(_receiverContract != address(0), "NUll receiver contract");
+//         factory = _factory;
+//         WETH = _WETH;
+//         USDC = _USDC;
+//         receiverContract = _receiverContract;
+//     }
 
-    uint24 public constant poolFee = 3000; // 0.3% Uniswap fee tier
+//     modifier onlyOwner() {
+//         require(msg.sender == owner, "USDCETHRouter: NOT_OWNER");
+//         _;
+//     }
 
-    // Events for logging
-    event SwappedUSDCForETH(uint256 usdcAmount, uint256 ethAmount);
-    event SwappedETHForUSDC(uint256 ethAmount, uint256 usdcAmount);
-    event SwapFailed(uint256 usdcAmount, string reason);
+//     function setReceiverContract(address _receiverContract) external onlyOwner {
+//         require(_receiverContract != address(0), "USDCETHRouter: ZERO_ADDRESS");
+//         emit ReceiverContractUpdated(receiverContract, _receiverContract);
+//         receiverContract = _receiverContract;
+//     }
 
-    constructor(
-        address _swapRouter,
-        address _usdc,
-        address _weth,
-        address _vaultContract,
-        address _receiverContract
-    ) {
-        require(_swapRouter != address(0), "Invalid SwapRouter address");
-        require(_usdc != address(0), "Invalid USDC address");
-        require(_weth != address(0), "Invalid WETH address");
-        require(_vaultContract != address(0), "Invalid Vault address");
-        require(_receiverContract != address(0), "Invalid Receiver address");
+//     // Required for receiving ETH from WETH unwrapping
+//     function() external payable {
+//         require(
+//             msg.sender == WETH || msg.sender == receiverContract,
+//             "Only accept ETH from WETH or receiver"
+//         );
+//     }
 
-        swapRouter = ISwapRouter(_swapRouter);
-        USDC = IERC20(_usdc);
-        WETH = IWETH(_weth);
-        vaultContract = _vaultContract;
-        receiverContract = _receiverContract;
-    }
+//     // **** ETH TO USDC ****
 
-    function takeAndSwapUSDC(
-        uint256 amount,
-        uint256 amountOutMin
-    ) external returns (uint256 amountOut) {
-        require(msg.sender == vaultContract, "Only vault can call");
-        require(amount > 0, "No USDC to swap");
-        // Transfer USDC from vault to this contract
-        require(
-            USDC.transferFrom(vaultContract, address(this), amount),
-            "USDC transfer failed"
-        );
+//     // Convert ETH to USDC
+//     function swapExactETHForUSDC(
+//         uint amountOutMin,
+//         address to,
+//         uint deadline
+//     ) external payable ensure(deadline) returns (uint amountOut) {
+//         // Create swap path: ETH → USDC
+//         address[] memory path = new address[](2);
+//         path[0] = WETH;
+//         path[1] = USDC;
 
-        // Approve Uniswap to spend the USDC
-        USDC.approve(address(swapRouter), amount);
+//         // Calculate expected output amount
+//         uint[] memory amounts = UniswapV2Library.getAmountsOut(
+//             factory,
+//             msg.value,
+//             path
+//         );
+//         require(
+//             amounts[1] >= amountOutMin,
+//             "USDCETHRouter: INSUFFICIENT_OUTPUT_AMOUNT"
+//         );
 
-        try
-            swapRouter.exactInputSingle(
-                ISwapRouter.ExactInputSingleParams({
-                    tokenIn: address(USDC),
-                    tokenOut: address(WETH),
-                    fee: poolFee,
-                    recipient: address(this),
-                    deadline: block.timestamp + 300,
-                    amountIn: amount,
-                    amountOutMinimum: amountOutMin,
-                    sqrtPriceLimitX96: 0
-                })
-            )
-        returns (uint256 _amountOut) {
-            amountOut = _amountOut;
+//         // Wrap ETH
+//         IWETH(WETH).deposit.value(msg.value)();
 
-            // Convert WETH to ETH
-            WETH.withdraw(amountOut);
+//         // Transfer WETH to pair contract
+//         address pair = UniswapV2Library.pairFor(factory, WETH, USDC);
+//         TransferHelper.safeTransfer(WETH, pair, msg.value);
 
-            // Send ETH to Receiver Contract
-            (bool success, ) = payable(receiverContract).call{value: amountOut}(
-                ""
-            );
-            require(success, "ETH transfer failed");
+//         // Execute the swap
+//         _swap(amounts, path, to);
 
-            emit SwappedUSDCForETH(amount, amountOut);
-            return amountOut;
-        } catch Error(string memory reason) {
-            // Reset the approval
-            USDC.approve(address(swapRouter), 0);
+//         // Emit event
+//         emit SwappedETHForUSDC(msg.sender, msg.value, amounts[1]);
 
-            // Send USDC back to vault
-            USDC.transfer(vaultContract, amount);
+//         return amounts[1];
+//     }
 
-            emit SwapFailed(amount, reason);
-            revert(reason);
-        }
-    }
+//     // **** USDC TO ETH ****
 
-    // In your Swap contract
-    function recoverUSDC() external {
-        require(msg.sender == vaultContract, "Only vault can call");
-        uint256 usdcBalance = USDC.balanceOf(address(this));
-        if (usdcBalance > 0) {
-            USDC.transfer(vaultContract, usdcBalance);
-        }
-    }
+//     // Convert USDC to ETH
+//     function swapExactUSDCForETH(
+//         uint amountIn,
+//         uint amountOutMin,
+//         address to,
+//         uint deadline
+//     ) external ensure(deadline) returns (uint amountOut) {
+//         // Create swap path: USDC → ETH
+//         address[] memory path = new address[](2);
+//         path[0] = USDC;
+//         path[1] = WETH;
 
-    function swapAllETHForUSDC(
-        uint256 amountOutMin
-    ) external returns (uint256 amountOut) {
-        require(msg.sender == receiverContract, "Only receiver can call");
+//         // Calculate expected output amount
+//         uint[] memory amounts = UniswapV2Library.getAmountsOut(
+//             factory,
+//             amountIn,
+//             path
+//         );
+//         require(
+//             amounts[1] >= amountOutMin,
+//             "USDCETHRouter: INSUFFICIENT_OUTPUT_AMOUNT"
+//         );
 
-        uint256 ethBalance = address(this).balance;
-        require(ethBalance > 0, "No ETH to swap");
+//         // Transfer USDC from user to pair
+//         address pair = UniswapV2Library.pairFor(factory, USDC, WETH);
+//         TransferHelper.safeTransferFrom(USDC, msg.sender, pair, amountIn);
 
-        // Convert ETH to WETH
-        WETH.deposit{value: ethBalance}();
+//         // Execute swap to this address
+//         _swap(amounts, path, address(this));
 
-        // Approve Uniswap to use WETH
-        WETH.approve(address(swapRouter), ethBalance);
+//         // Unwrap WETH to ETH
+//         IWETH(WETH).withdraw(amounts[1]);
 
-        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
-            .ExactInputSingleParams({
-                tokenIn: address(WETH),
-                tokenOut: address(USDC),
-                fee: poolFee,
-                recipient: vaultContract, // Send USDC directly to Vault
-                deadline: block.timestamp + 300,
-                amountIn: ethBalance,
-                amountOutMinimum: amountOutMin,
-                sqrtPriceLimitX96: 0
-            });
+//         // Send ETH to recipient
+//         TransferHelper.safeTransferETH(to, amounts[1]);
 
-        // Swap ETH (WETH) for USDC
-        amountOut = swapRouter.exactInputSingle(params);
-        require(amountOut >= amountOutMin, "Slippage exceeded");
+//         // Emit event
+//         emit SwappedUSDCForETH(msg.sender, amountIn, amounts[1]);
 
-        emit SwappedETHForUSDC(ethBalance, amountOut);
-        return amountOut;
-    }
+//         return amounts[1];
+//     }
 
-    function depositUSDC(uint256 amount) external {
-        require(msg.sender == vaultContract, "Only vault can deposit");
-        require(amount > 0, "Amount must be greater than 0");
+//     // **** QUOTE FUNCTIONS ****
 
-        bool success = USDC.transferFrom(vaultContract, address(this), amount);
-        require(success, "USDC transfer failed");
-    }
+//     // Get quote for ETH → USDC
+//     function getUSDCAmountOut(
+//         uint ethAmountIn
+//     ) external view returns (uint usdcAmountOut) {
+//         address[] memory path = new address[](2);
+//         path[0] = WETH;
+//         path[1] = USDC;
+//         uint[] memory amounts = UniswapV2Library.getAmountsOut(
+//             factory,
+//             ethAmountIn,
+//             path
+//         );
+//         return amounts[1];
+//     }
 
-    function depositETH() external payable {
-        require(msg.sender == receiverContract, "Only receiver can deposit");
-        require(msg.value > 0, "Must send ETH");
-    }
+//     // Get quote for USDC → ETH
+//     function getETHAmountOut(
+//         uint usdcAmountIn
+//     ) external view returns (uint ethAmountOut) {
+//         address[] memory path = new address[](2);
+//         path[0] = USDC;
+//         path[1] = WETH;
+//         uint[] memory amounts = UniswapV2Library.getAmountsOut(
+//             factory,
+//             usdcAmountIn,
+//             path
+//         );
+//         return amounts[1];
+//     }
 
-    function getUSDCBalance() external view returns (uint256) {
-        return USDC.balanceOf(address(this));
-    }
+//     // **** INTERNAL FUNCTIONS ****
 
-    function getETHBalance() external view returns (uint256) {
-        return address(this).balance;
-    }
-
-    // Allow receiving ETH
-    receive() external payable {
-        // Only accept ETH from WETH contract (during unwrapping) or from receiver
-        require(
-            msg.sender == address(WETH) || msg.sender == receiverContract,
-            "Only accept ETH from WETH or receiver"
-        );
-    }
-}
+//     // Internal swap function
+//     function _swap(
+//         uint[] memory amounts,
+//         address[] memory path,
+//         address _to
+//     ) internal {
+//         (address input, address output) = (path[0], path[1]);
+//         (address token0, ) = UniswapV2Library.sortTokens(input, output);
+//         uint amountOut = amounts[1];
+//         (uint amount0Out, uint amount1Out) = input == token0
+//             ? (uint(0), amountOut)
+//             : (amountOut, uint(0));
+//         IUniswapV2Pair(UniswapV2Library.pairFor(factory, input, output)).swap(
+//             amount0Out,
+//             amount1Out,
+//             _to,
+//             new bytes(0)
+//         );
+//     }
+// }

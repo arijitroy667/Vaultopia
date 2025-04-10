@@ -2,19 +2,26 @@
 pragma solidity >=0.7.5;
 pragma abicoder v2;
 
-interface ISwapRouter {
-    struct ExactInputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        uint24 fee;
-        address recipient;
-        uint256 deadline;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
-        uint160 sqrtPriceLimitX96;
-    }
+// Call the function that both takes the USDC and performs the swap
+interface ISwapContract {
+    function swapExactUSDCForETH(
+        uint amountIn,
+        uint amountOutMin,
+        address to,
+        uint deadline
+    ) external returns (uint amountOut);
 
-    function exactInputSingle(
-        ExactInputSingleParams calldata params
-    ) external payable returns (uint256 amountOut);
+    function swapExactETHForUSDC(
+        uint amountOutMin,
+        address to,
+        uint deadline
+    ) external payable returns (uint amountOut);
+
+    function getETHAmountOut(
+        uint usdcAmountIn
+    ) external view returns (uint ethAmountOut);
+
+    function getUSDCAmountOut(
+        uint ethAmountIn
+    ) external view returns (uint usdcAmountOut);
 }

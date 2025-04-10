@@ -37,9 +37,11 @@ interface ILidoWithdrawal {
 }
 
 interface ISwapContract {
-    function swapAllETHForUSDC(
-        uint256 minUSDCAmount
-    ) external returns (uint256);
+    function swapExactETHForUSDC(
+        uint amountOutMin,
+        address to,
+        uint deadline
+    ) external payable returns (uint amountOut);
 }
 
 contract Receiver {
@@ -203,13 +205,16 @@ contract Receiver {
         require(postBalance > preBalance, "No ETH received");
         uint256 ethReceived = postBalance - preBalance;
 
-        // Forward ETH to Swap contract
-        (bool success, ) = payable(swapContract).call{value: ethReceived}("");
-        require(success, "ETH transfer failed");
+        // Calculate deadline
+        uint256 deadline = block.timestamp + 300;
 
-        // Call Swap contract to convert ETH to USDC and send to Vault
-        usdcReceived = ISwapContract(swapContract).swapAllETHForUSDC(
-            minUSDCExpected
+        // Call new swap function to convert ETH to USDC and send directly to Vault
+        usdcReceived = ISwapContract(swapContract).swapExactETHForUSDC{
+            value: ethReceived
+        }(
+            minUSDCExpected,
+            vaultContract, // Send USDC directly to vault
+            deadline
         );
 
         emit WithdrawalClaimed(user, requestId, ethReceived, usdcReceived);
