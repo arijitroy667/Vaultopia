@@ -7,11 +7,6 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
-// Interface definitions
-interface IERC20 {
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address recipient, uint256 amount) external returns (bool);
-}
 
 interface ILidoWithdrawal {
     function requestWithdrawals(
@@ -298,11 +293,11 @@ contract WithdrawalFacet is ReentrancyGuard {
     }
     
     function safeInitiateWithdrawal(address user) external {
-        initiateWithdrawal(user);
+        this.initiateWithdrawal(user);
     }
     
     function safeProcessCompletedWithdrawal(address user) external {
-        processCompletedWithdrawals(user, 0);
+        this.processCompletedWithdrawals(user, 0);
     }
     
     function emergencyWithdraw() external nonReentrant {

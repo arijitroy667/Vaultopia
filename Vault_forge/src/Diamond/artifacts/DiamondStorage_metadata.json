@@ -1,0 +1,45 @@
+{
+	"compiler": {
+		"version": "0.8.29+commit.ab55807c"
+	},
+	"language": "Solidity",
+	"output": {
+		"abi": [],
+		"devdoc": {
+			"kind": "dev",
+			"methods": {},
+			"version": 1
+		},
+		"userdoc": {
+			"kind": "user",
+			"methods": {},
+			"version": 1
+		}
+	},
+	"settings": {
+		"compilationTarget": {
+			"Vault_forge/src/Diamond/DiamondStorage.sol": "DiamondStorage"
+		},
+		"evmVersion": "cancun",
+		"libraries": {},
+		"metadata": {
+			"bytecodeHash": "ipfs"
+		},
+		"optimizer": {
+			"enabled": false,
+			"runs": 200
+		},
+		"remappings": []
+	},
+	"sources": {
+		"Vault_forge/src/Diamond/DiamondStorage.sol": {
+			"keccak256": "0x269cc1908b0659132f2104a5999207efbd4e8d43350a196b07887ee8e4be565b",
+			"license": "MIT",
+			"urls": [
+				"bzz-raw://5b42abb16defb464fee2a6b85945441a82cd9b3ef11a825c2218a74a8b2f16c5",
+				"dweb:/ipfs/QmVGYEN89TC3439qbGngKnJCt3Vg8kNnEmmpy7YoDKTyCJ"
+			]
+		}
+	},
+	"version": 1
+}

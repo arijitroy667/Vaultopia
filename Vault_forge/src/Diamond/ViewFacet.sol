@@ -19,6 +19,11 @@ contract ViewFacet {
     uint256 private constant LOCK_PERIOD = 30 days;
     uint256 private constant LIQUID_PORTION = 60; // 60% can be withdrawn immediately
 
+    function balanceOf(address user) public view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        return ds.balances[user];
+    }
+
     // Basic vault info
     function totalAssets() external view returns (uint256) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
@@ -325,8 +330,4 @@ contract ViewFacet {
         return ds.accumulatedFees;
     }
 
-    function balanceOf(address user) external view returns (uint256) {
-        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        return ds.balances[user];
-    }
 }

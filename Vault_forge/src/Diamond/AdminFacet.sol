@@ -5,14 +5,6 @@ import "./DiamondStorage.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-// Interface definitions
-interface IERC20 {
-    function transfer(
-        address recipient,
-        uint256 amount
-    ) external returns (bool);
-}
-
 // Custom errors
 error NotAuthorized();
 error InvalidAddress();
