@@ -8,7 +8,13 @@ import { useVault } from "@/context/vault-context"
 import { useWallet } from "@/context/wallet-context"
 import { ArrowRight, Info } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-
+import {checkUSDCBalance,
+  checkVaultBalance,
+  checkMaxDeposit,
+  approveUSDC,
+  queueLargeDeposit,
+  deposit,
+  main} from "../../../Vault_forge/src/Integrate/Deposit"
 export function DepositSection() {
   const [amount, setAmount] = useState("")
   const [isLoading, setIsLoading] = useState(false)
@@ -90,7 +96,7 @@ export function DepositSection() {
       <CardFooter>
         <Button
           className="w-full"
-          onClick={handleDeposit}
+          onClick={deposit()}
           disabled={isLoading || !amount || Number.parseFloat(amount) <= 0 || Number.parseFloat(amount) > balance}
         >
           {isLoading ? "Processing..." : "Deposit"}
