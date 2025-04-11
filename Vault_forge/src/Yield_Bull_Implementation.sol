@@ -2,23 +2,69 @@
 pragma solidity ^0.8.20;
 
 import "./StakingController.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "./Errors.sol";
 
-contract Yield_Bull is StakingController {
+contract Yield_Bull_Implementation is StakingController {
     using Math for uint256;
     using SafeERC20 for IERC20;
 
-    constructor(
+    // Storage slot for initialized flag
+    bytes32 private constant INITIALIZED_SLOT = keccak256("proxy.initialized");
+
+    constructor() StakingController(address(0)) {
+        // The actual initialization happens in the initialize function
+        // This constructor only exists to satisfy the inheritance requirements
+    }
+
+    // Add this function to initialize storage variables normally set in the VaultStorage constructor
+    function _initializeVaultStorage(address _assetToken) internal {
+        // These would normally be set in the VaultStorage constructor
+        // but need to be set manually when using a proxy
+
+        // We can't set immutables through a proxy, so we need to use storage variables instead
+        bytes32 assetTokenAddressSlot = keccak256("ASSET_TOKEN_ADDRESS_SLOT");
+        bytes32 assetSlot = keccak256("ASSET_SLOT");
+        bytes32 usdcSlot = keccak256("USDC_SLOT");
+        bytes32 decimalsSlot = keccak256("DECIMALS_SLOT");
+
+        // Store values in specific storage slots
+        assembly {
+            sstore(assetTokenAddressSlot, _assetToken)
+        }
+
+        // Initialize regular contract state
+        asset = IERC20(_assetToken);
+        USDC = IUSDC(_assetToken);
+        _decimals = USDC.decimals();
+    }
+
+    // Replace constructor with initializer
+    function initialize(
+        address _assetToken,
         address _lidoWithdrawal,
         address _wstETH,
         address _receiver,
         address _swapContract
-    ) VaultStorage(0x06901fD3D877db8fC8788242F37c1A15f05CEfF8) {
+    ) external {
+        // Check if already initialized
+        bytes32 initializedSlot = INITIALIZED_SLOT;
+        bool initialized;
+        assembly {
+            initialized := sload(initializedSlot)
+        }
+        require(!initialized, "Already initialized");
+
+        // Set initialized flag
+        assembly {
+            sstore(initializedSlot, true)
+        }
+
+        // Initialize VaultStorage first
+        _initializeVaultStorage(_assetToken);
+
+        // Continue with initialization
         if (_lidoWithdrawal == address(0)) revert InvalidAddress();
         if (_wstETH == address(0)) revert InvalidAddress();
         if (_receiver == address(0)) revert InvalidAddress();
@@ -37,19 +83,19 @@ contract Yield_Bull is StakingController {
         uint256 assets,
         address receiver
     ) public nonReentrant returns (uint256 shares) {
-        if (assets < 0) revert ZeroAmount();
+        if (assets == 0) revert ZeroAmount();
         if (depositsPaused) revert DepositsPaused();
-        if (assets <= MIN_DEPOSIT_AMOUNT) revert ZeroAmount();
+        if (assets < MIN_DEPOSIT_AMOUNT) revert ZeroAmount();
         if (emergencyShutdown) revert EmergencyActive();
 
         shares = previewDeposit(assets);
-        if (shares < 0) revert ZeroAmount();
+        if (shares == 0) revert ZeroAmount();
 
         if (assets > totalAssets / 10) {
             // If deposit is > 10% of total assets
             if (
-                largeDepositUnlockTime[msg.sender] == 0 &&
-                block.timestamp <= largeDepositUnlockTime[msg.sender]
+                largeDepositUnlockTime[msg.sender] == 0 ||
+                block.timestamp < largeDepositUnlockTime[msg.sender]
             ) revert InvalidDeadline();
             delete largeDepositUnlockTime[msg.sender];
         }
@@ -154,6 +200,41 @@ contract Yield_Bull is StakingController {
         }
     }
 
+    function _recalculateLockedAssets() internal {
+        for (uint256 i = 0; i < userAddresses.length; i++) {
+            address user = userAddresses[i];
+
+            // Get all user's deposits
+            StakedDeposit[] storage deposits = userStakedDeposits[user];
+
+            // Reset the user's staked portions and recalculate
+            uint256 stillLockedAmount = 0;
+
+            // Check each deposit individually
+            for (uint256 j = 0; j < deposits.length; j++) {
+                // Only consider deposits that haven't been withdrawn yet
+                if (!deposits[j].withdrawn) {
+                    // If deposit is still locked, count it towards locked amount
+                    if (block.timestamp < deposits[j].timestamp + LOCK_PERIOD) {
+                        stillLockedAmount += deposits[j].amount;
+                    }
+                }
+            }
+
+            // Update user's locked assets with what's still locked
+            lockedAssets[user] = stillLockedAmount;
+
+            // If we're using stakedPortions for accounting elsewhere, update it
+            // but only for locked assets (not matured but unwithdrawn assets)
+            stakedPortions[user] = stillLockedAmount;
+
+            // Emit event for significant changes
+            if (stillLockedAmount != lockedAssets[user]) {
+                emit LockedAssetsUpdated(user, stillLockedAmount);
+            }
+        }
+    }
+
     function isUpdateNeeded() public view returns (bool) {
         return block.timestamp >= lastDailyUpdate + UPDATE_INTERVAL;
     }
@@ -196,7 +277,7 @@ contract Yield_Bull is StakingController {
     }
 
     function updateWstETHBalance(address user, uint256 amount) external {
-        if (msg.sender != swapContract || msg.sender != owner)
+        if (msg.sender != swapContract && msg.sender != owner)
             revert NotAuthorized();
         userWstETHBalance[user] += amount;
         emit WstETHBalanceUpdated(user, amount, userWstETHBalance[user]);
@@ -242,155 +323,10 @@ contract Yield_Bull is StakingController {
         return unlockTimes;
     }
 
-    function getNearestUnlockTime(address user) public view returns (uint256) {
-        uint256[] memory times = getUnlockTime(user);
-        if (times.length == 0) return 0;
-        return times[0]; // Return earliest maturity date
-    }
-
-    function getWithdrawableAmount(address user) public view returns (uint256) {
-        uint256 totalUserBalance = convertToAssets(balances[user]);
-
-        // If user has no balance, nothing to withdraw
-        if (totalUserBalance == 0) return 0;
-
-        // Get all user's staked deposits
-        StakedDeposit[] storage deposits = userStakedDeposits[user];
-
-        // For users with no staked deposits, check global timestamp
-        if (deposits.length == 0) {
-            bool isLocked = block.timestamp <
-                depositTimestamps[user] + LOCK_PERIOD;
-            return
-                isLocked
-                    ? (totalUserBalance * LIQUID_PORTION) / 100
-                    : totalUserBalance;
-        }
-
-        // Track matured and unmatured portions
-        uint256 maturedValue = 0;
-        uint256 unmaturedValue = 0;
-
-        // Calculate the value of matured/unmatured deposits
-        for (uint256 i = 0; i < deposits.length; i++) {
-            if (!deposits[i].withdrawn) {
-                if (block.timestamp >= deposits[i].timestamp + LOCK_PERIOD) {
-                    maturedValue += deposits[i].amount;
-                } else {
-                    unmaturedValue += deposits[i].amount;
-                }
-            }
-        }
-
-        // Calculate total staked value
-        uint256 userTotalStaked = maturedValue + unmaturedValue;
-
-        // If all deposits are mature or no deposits exist, everything is withdrawable
-        if (userTotalStaked == 0 || unmaturedValue == 0) {
-            return totalUserBalance;
-        }
-
-        // Calculate withdrawable portion of unmatured deposits (60%)
-        uint256 withdrawableFromUnmatured = (unmaturedValue * LIQUID_PORTION) /
-            100;
-
-        // Total withdrawable value is matured deposits + withdrawable portion of unmatured
-        uint256 totalWithdrawableValue = maturedValue +
-            withdrawableFromUnmatured;
-
-        // Calculate ratio using proper USDC decimals (1e6)
-        uint256 withdrawableRatio = (totalWithdrawableValue * 1e6) /
-            userTotalStaked;
-
-        // Apply the ratio to total balance
-        return (totalUserBalance * withdrawableRatio) / 1e6;
-    }
-
-    function getLockedAmount(address user) public view returns (uint256) {
-        uint256 withdrawable = getWithdrawableAmount(user);
-        uint256 totalUserBalance = convertToAssets(balances[user]);
-
-        // Prevent underflow if withdrawable exceeds balance for any reason
-        return
-            withdrawable >= totalUserBalance
-                ? 0
-                : totalUserBalance - withdrawable;
-    }
-
-    function getTotalStakedAssets() public view returns (uint256) {
-        uint256 totalStaked = 0;
-
-        // Iterate through all users
-        for (uint256 i = 0; i < userAddresses.length; i++) {
-            address user = userAddresses[i];
-
-            // Get all of this user's staked deposits
-            StakedDeposit[] storage deposits = userStakedDeposits[user];
-
-            // Sum up all non-withdrawn deposits
-            for (uint256 j = 0; j < deposits.length; j++) {
-                if (!deposits[j].withdrawn) {
-                    totalStaked += deposits[j].amount;
-                }
-            }
-        }
-
-        // Verify consistency with totalStakedValue state variable
-        require(
-            totalStaked == totalStakedValue ||
-                (totalStaked == 0 && totalStakedValue == 0),
-            "Staked accounting mismatch"
-        );
-
-        return totalStaked;
-    }
-
-    function updateLockedAssets() internal {
-        uint256 currentTime = block.timestamp;
-        if (currentTime >= lastUpdateTime + 1 days) {
-            // Update locked assets daily
-            _recalculateLockedAssets();
-            lastUpdateTime = currentTime;
-        }
-    }
-
-    function _recalculateLockedAssets() internal {
-        for (uint256 i = 0; i < userAddresses.length; i++) {
-            address user = userAddresses[i];
-
-            // Get all user's deposits
-            StakedDeposit[] storage deposits = userStakedDeposits[user];
-
-            // Reset the user's staked portions and recalculate
-            uint256 stillLockedAmount = 0;
-
-            // Check each deposit individually
-            for (uint256 j = 0; j < deposits.length; j++) {
-                // Only consider deposits that haven't been withdrawn yet
-                if (!deposits[j].withdrawn) {
-                    // If deposit is still locked, count it towards locked amount
-                    if (block.timestamp < deposits[j].timestamp + LOCK_PERIOD) {
-                        stillLockedAmount += deposits[j].amount;
-                    }
-                }
-            }
-
-            // Update user's locked assets with what's still locked
-            lockedAssets[user] = stillLockedAmount;
-
-            // If we're using stakedPortions for accounting elsewhere, update it
-            // but only for locked assets (not matured but unwithdrawn assets)
-            stakedPortions[user] = stillLockedAmount;
-
-            // Emit event for significant changes
-            if (stillLockedAmount != lockedAssets[user]) {
-                emit LockedAssetsUpdated(user, stillLockedAmount);
-            }
-        }
-    }
+    // Remaining view functions moved to VaultLens for optimization
+    // Only core functionality here
 
     // Admin functions
-
     function setLidoWithdrawalAddress(
         address _lidoWithdrawal
     ) external onlyOwner {
@@ -426,7 +362,7 @@ contract Yield_Bull is StakingController {
 
     function collectAccumulatedFees() external {
         if (msg.sender != feeCollector) revert NotAuthorized();
-        if (accumulatedFees < 0) revert ZeroAmount();
+        if (accumulatedFees == 0) revert ZeroAmount();
 
         uint256 feesToCollect = accumulatedFees;
         accumulatedFees = 0;

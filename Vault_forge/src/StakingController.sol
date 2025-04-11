@@ -8,6 +8,8 @@ abstract contract StakingController is BaseVault {
     using SafeMath for uint256;
     using Math for uint256;
 
+    constructor(address _assetToken) BaseVault(_assetToken) {}
+
     function calculateFee(uint256 yield) internal pure returns (uint256) {
         if (yield == 0) return 0;
 

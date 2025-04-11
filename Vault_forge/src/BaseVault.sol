@@ -9,6 +9,8 @@ abstract contract BaseVault is VaultStorage {
     using MathLib for uint256;
     using SafeERC20 for IERC20;
 
+    constructor(address _assetToken) VaultStorage(_assetToken) {}
+
     function maxDeposit(
         address receiver
     ) public view returns (uint256 maxAssets) {

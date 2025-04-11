@@ -1,0 +1,9 @@
+// Errors.sol
+error NotAuthorized();
+error ZeroAmount();
+error DepositsPaused();
+error EmergencyActive();
+error InvalidAddress();
+error WithdrawalInProgress();
+error InvalidDeadline();
+// etc.
