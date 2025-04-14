@@ -1,4 +1,4 @@
-require('dotenv').config({ path: '../.env' });
+require('dotenv').config({ path: '../../../.env' });
 const ethers = require('ethers');
 
 // ABI snippets for the functions we need
@@ -29,7 +29,7 @@ async function connectToNetwork() {
 
 // Connect to contracts
 async function connectToContracts(wallet) {
-  const diamondAddress = process.env.DEPOSIT_ADDRESS;
+  const diamondAddress = process.env.YIELDBULL_CONTRACT_ADDRESS;
   const usdcAddress = process.env.USDC_CONTRACT_ADDRESS;
   
   const diamondContract = new ethers.Contract(diamondAddress, DIAMOND_ABI, wallet);
@@ -113,6 +113,12 @@ async function queueLargeDeposit(diamondContract, totalAssets, depositAmount) {
   }
   
   return false;
+}
+
+async function previewDeposit(diamondContract, amount) {
+  const expectedShares = await diamondContract.previewDeposit(amount);
+  console.log(`Expected shares from deposit: ${ethers.utils.formatUnits(expectedShares)}`);
+  return expectedShares;
 }
 
 // Deposit USDC to vault
@@ -213,6 +219,7 @@ module.exports = {
   checkMaxDeposit,
   approveUSDC,
   queueLargeDeposit,
+  previewDeposit,
   deposit,
   main
 };

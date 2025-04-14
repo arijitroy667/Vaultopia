@@ -15,6 +15,7 @@ interface WalletContextType {
   isAdmin: boolean;
   address: string;
   balance: number;
+  provider: ethers.BrowserProvider | null;
   connect: () => Promise<void>;
   disconnect: () => void;
 }
@@ -25,6 +26,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
   const [balance, setBalance] = useState(0);
+  const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
 
   // Check if MetaMask is installed
   const checkMetaMask = () => {
@@ -42,10 +44,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!checkMetaMask()) return;
 
     try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
+      const etherprovider = new ethers.BrowserProvider(window.ethereum);
+      setProvider(etherprovider);
+      const signer = await etherprovider.getSigner();
       const userAddress = await signer.getAddress();
-      const userBalance = await provider.getBalance(userAddress);
+      const userBalance = await etherprovider.getBalance(userAddress);
       const formattedBalance = Number(ethers.formatEther(userBalance));
 
       setIsConnected(true);
@@ -68,6 +71,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setIsConnected(false);
     setAddress("");
     setBalance(0);
+    setProvider(null);
 
     toast.info("Wallet disconnected", {
       description: "Your wallet has been disconnected",
@@ -78,7 +82,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const isAdmin = address.toLowerCase() === "0x1234567890123456789012345678901234567890".toLowerCase();
 
   return (
-    <WalletContext.Provider value={{ isConnected, isAdmin, address, balance, connect, disconnect }}>
+    <WalletContext.Provider value={{ isConnected, isAdmin, address, balance,provider, connect, disconnect }}>
       {children}
     </WalletContext.Provider>
   );
