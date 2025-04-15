@@ -119,6 +119,7 @@ import { useState } from "react"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
+import { toast } from "sonner"
 import { useVault } from "@/context/vault-context"
 import { useWallet } from "@/context/wallet-context"
 import { ArrowRight, Info } from "lucide-react"
@@ -128,12 +129,14 @@ export function DepositSection() {
   const [amount, setAmount] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const { deposit, vaultData } = useVault()
-  const { balance, isConnected } = useWallet()
+  const { usdcBalance, isConnected } = useWallet()
 
   const handleDeposit = async () => {
     if (!amount || Number.parseFloat(amount) <= 0) return
     if (!isConnected) {
-      alert("Please connect your wallet first");
+      toast.error("Wallet not connected", {
+        description: "Please connect your wallet first"
+      });
       return;
     }
 
@@ -145,6 +148,9 @@ export function DepositSection() {
       setAmount("");
     } catch (error) {
       console.error("Deposit failed:", error);
+    toast.error("Deposit failed", {
+      description: error instanceof Error ? error.message : "Unknown error occurred"
+    });
     } finally {
       setIsLoading(false);
     }
@@ -153,6 +159,13 @@ export function DepositSection() {
   const estimatedShares = amount && vaultData.exchangeRate 
     ? Number.parseFloat(amount) / vaultData.exchangeRate 
     : 0;
+
+    const formattedBalance = typeof usdcBalance === 'number' 
+    ? usdcBalance.toLocaleString('en-US', { 
+        maximumFractionDigits: 2,
+        minimumFractionDigits: 2
+      })
+    : '0.00';
 
   return (
     <Card>
@@ -170,7 +183,7 @@ export function DepositSection() {
               >
                 Amount to Deposit
               </label>
-              <span className="text-xs text-muted-foreground">Balance: {balance} USDC</span>
+              <span className="text-xs text-muted-foreground">Balance: {formattedBalance} USDC</span>
             </div>
             <div className="flex space-x-2">
               <Input
@@ -180,7 +193,7 @@ export function DepositSection() {
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
               />
-              <Button variant="outline" size="sm" onClick={() => setAmount(balance.toString())}>
+              <Button variant="outline" size="sm" onClick={() => setAmount(usdcBalance.toString())}>
                 Max
               </Button>
             </div>
@@ -214,7 +227,7 @@ export function DepositSection() {
         <Button
           className="w-full"
           onClick={handleDeposit}
-          disabled={isLoading || !amount || Number.parseFloat(amount) <= 0 || Number.parseFloat(amount) > balance}
+          disabled={isLoading || !amount || Number.parseFloat(amount) <= 0 || Number.parseFloat(amount) > usdcBalance}
         >
           {isLoading ? "Processing..." : "Deposit"}
           {!isLoading && <ArrowRight className="ml-2 h-4 w-4" />}

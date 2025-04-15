@@ -15,6 +15,7 @@ interface WalletContextType {
   isAdmin: boolean;
   address: string;
   balance: number;
+  usdcBalance: number;
   provider: ethers.BrowserProvider | null;
   connect: () => Promise<void>;
   disconnect: () => void;
@@ -26,8 +27,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
   const [balance, setBalance] = useState(0);
+  const [usdcBalance, setUsdcBalance] = useState(0);
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
 
+  const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
+  const USDC_ABI = [
+    "function balanceOf(address account) external view returns (uint256)",
+    "function decimals() external view returns (uint8)"
+  ];
+  
   // Check if MetaMask is installed
   const checkMetaMask = () => {
     if (typeof window.ethereum === "undefined") {
@@ -51,6 +59,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const userBalance = await etherprovider.getBalance(userAddress);
       const formattedBalance = Number(ethers.formatEther(userBalance));
 
+      if (usdcAddress) {
+        const usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, signer);
+        const usdcDecimals = await usdcContract.decimals();
+        const usdcBalanceRaw = await usdcContract.balanceOf(userAddress);
+        const formattedUsdcBalance = Number(ethers.formatUnits(usdcBalanceRaw, usdcDecimals));
+        setUsdcBalance(formattedUsdcBalance);
+
+        console.log("Raw USDC balance:", usdcBalanceRaw.toString());
+        console.log("Formatted USDC balance:", formattedUsdcBalance);
+      }
+
       setIsConnected(true);
       setAddress(userAddress);
       setBalance(formattedBalance);
@@ -71,6 +90,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setIsConnected(false);
     setAddress("");
     setBalance(0);
+    setUsdcBalance(0);
     setProvider(null);
 
     toast.info("Wallet disconnected", {
@@ -82,7 +102,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const isAdmin = address.toLowerCase() === "0x1234567890123456789012345678901234567890".toLowerCase();
 
   return (
-    <WalletContext.Provider value={{ isConnected, isAdmin, address, balance,provider, connect, disconnect }}>
+    <WalletContext.Provider value={{ isConnected, isAdmin, address, balance,usdcBalance,provider, connect, disconnect }}>
       {children}
     </WalletContext.Provider>
   );
