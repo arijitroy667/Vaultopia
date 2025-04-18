@@ -82,7 +82,7 @@ contract DepositFacet is Modifiers {
         if (shares == 0) revert NoSharesMinted();
         
         // Check for large deposits that need timelock
-        if (assets > ds.totalAssets / 10) {
+        if (ds.totalAssets > 0 && assets > ds.totalAssets / 10) {
             if (
                 ds.largeDepositUnlockTime[msg.sender] == 0 ||
                 block.timestamp < ds.largeDepositUnlockTime[msg.sender]

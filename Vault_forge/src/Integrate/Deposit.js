@@ -21,16 +21,16 @@ const USDC_ABI = [
 
 // Connect to the network
 async function connectToNetwork() {
-  const provider = new ethers.providers.JsonRpcProvider(process.env.ALCHEMY_URL);
-  const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+  const provider = new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_ALCHEMY_URL);
+  const wallet = new ethers.Wallet(process.env.NEXT_PUBLIC_PRIVATE_KEY, provider);
   console.log(`Connected with address: ${wallet.address}`);
   return { provider, wallet };
 }
 
 // Connect to contracts
 async function connectToContracts(wallet) {
-  const diamondAddress = process.env.YIELDBULL_CONTRACT_ADDRESS;
-  const usdcAddress = process.env.USDC_CONTRACT_ADDRESS;
+  const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
+  const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
   
   const diamondContract = new ethers.Contract(diamondAddress, DIAMOND_ABI, wallet);
   const usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, wallet);
