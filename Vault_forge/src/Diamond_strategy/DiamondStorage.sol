@@ -47,7 +47,6 @@ library DiamondStorage {
         address wstETHAddress;
         address receiverContract;
         // Mappings
-        mapping(bytes32 => uint256) pendingOperations;
         mapping(address => uint256) stakedPortions;
         mapping(address => uint256) userDeposits;
         mapping(address => uint256) balances;
@@ -56,6 +55,8 @@ library DiamondStorage {
         mapping(address => bool) isExistingUser;
         mapping(address => uint256) userWstETHBalance;
         mapping(address => bool) withdrawalInProgress;
+        mapping(bytes4 => bool) supportedInterfaces;
+        mapping(bytes32 => uint256) pendingOperations;
         mapping(address => uint256) withdrawalRequestIds;
         mapping(address => uint256) largeDepositUnlockTime;
         mapping(address => uint256) pendingEthStakes;

@@ -5,6 +5,7 @@ import "./libraries/LibDiamond.sol";
 import "./interfaces/IDiamondCut.sol";
 import "./interfaces/IDiamondLoupe.sol";
 import "./interfaces/IERC173.sol";
+import "./interfaces/IERC165.sol";
 import "./DiamondStorage.sol";
 
 contract Diamond {

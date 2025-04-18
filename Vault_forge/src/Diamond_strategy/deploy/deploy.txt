@@ -1,0 +1,98 @@
+Starting Diamond pattern deployment...
+Deployer address: 0x9aD95Ef94D945B039eD5E8059603119b61271486
+1. Deploying DiamondCutFacet...
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\DiamondCutFacet.sol\DiamondCutFacet.json
+DiamondCutFacet deployed to: 0x2a28560CFA13c23A2fDcde04B8080ebaa363471c
+DiamondCutFacet selectors: 0xee0c950c
+2. Deploying Diamond...
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\Diamond.sol\Diamond.json
+Diamond deployed to: 0x09AB15E29783AEC3cbd4F22797c3d9Db329B5B71
+3. Deploying all facets...
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\DiamondLoupeFacet.sol\DiamondLoupeFacet.json
+DiamondLoupeFacet deployed to: 0x08D3ad4cd291D5709807069e61980c2Da5959959
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\OwnershipFacet.sol\OwnershipFacet.json
+OwnershipFacet deployed to: 0x6517aBdADF61C8C24Cc4772b200F55de811D70f8
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\DepositFacet.sol\DepositFacet.json
+DepositFacet deployed to: 0xeE7f0B026A87f1DB8051Bc0752c5b5fE1b49e5C4
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\WithdrawFacet.sol\WithdrawFacet.json
+WithdrawFacet deployed to: 0x2a9c6D464bf2D4bc270499827BF2c1af295dafeD
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\ViewFacet.sol\ViewFacet.json
+ViewFacet deployed to: 0x78A7EDCDa994c5430d78B4c371E0864dA6e9EeD8
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\AdminFacet.sol\AdminFacet.json
+AdminFacet deployed to: 0xe1D682f619044Ad9B4CD9AFbFf5fF25104e05bE4
+4. Deploying DiamondInit...
+Looking for artifact at: C:\Users\ariji\Desktop\github\Vaultopia\Vault_forge\out\DiamondInit.sol\DiamondInit.json
+DiamondInit deployed to: 0xB754a74e72d6Ce737f6357F90FA18eb7214992aD
+5. Preparing diamond cut data...
+WARNING: Duplicate selector 0xc6e6f592 (convertToShares(uint256)) - already used by DepositFacet (convertToShares(uint256))
+WARNING: Duplicate selector 0x07a2d13a (convertToAssets(uint256)) - already used by WithdrawFacet (convertToAssets(uint256))
+Adding 4 functions from 0x08D3ad4cd291D5709807069e61980c2Da5959959
+  - 0xcdffacc6 (facetAddress(bytes4))
+  - 0x52ef6b2c (facetAddresses())
+  - 0xadfca15e (facetFunctionSelectors(address))
+  - 0x7a0ed627 (facets())
+Adding 3 functions from 0x6517aBdADF61C8C24Cc4772b200F55de811D70f8
+  - 0x8da5cb5b (owner())
+  - 0x715018a6 (renounceOwnership())
+  - 0xf2fde38b (transferOwnership(address))
+Adding 6 functions from 0xeE7f0B026A87f1DB8051Bc0752c5b5fE1b49e5C4
+  - 0xc6e6f592 (convertToShares(uint256))
+  - 0x6e553f65 (deposit(uint256,address))
+  - 0x402d267d (maxDeposit(address))
+  - 0xef8b30f7 (previewDeposit(uint256))
+  - 0x94dddda1 (queueLargeDeposit())
+  - 0xfaeb488a (safeTransferAndSwap(uint256,address,uint256))
+Adding 6 functions from 0x2a9c6D464bf2D4bc270499827BF2c1af295dafeD
+  - 0x07a2d13a (convertToAssets(uint256))
+  - 0x0a28a477 (previewWithdraw(uint256))
+  - 0x8372f208 (processCompletedWithdrawals(address,uint256))
+  - 0xe4a29eeb (safeInitiateWithdrawal(address))
+  - 0x78433499 (safeProcessCompletedWithdrawal(address))
+  - 0xb460af94 (withdraw(uint256,address,address))
+Adding 13 functions from 0x78A7EDCDa994c5430d78B4c371E0864dA6e9EeD8
+  - 0x70a08231 (balanceOf(address))
+  - 0x3ba0b9a9 (exchangeRate())
+  - 0x929ec537 (getLockedAmount(address))
+  - 0x981ef661 (getNearestUnlockTime(address))
+  - 0xdee7db90 (getTotalStakedAssets())
+  - 0xdbed1e88 (getUnlockTime(address))
+  - 0xf6777175 (getWithdrawableAmount(address))
+  - 0x7491687e (getWithdrawalStatus(address))
+  - 0xf85503b9 (isUpdateNeeded())
+  - 0xce96cb77 (maxWithdraw(address))
+  - 0x01e1d114 (totalAssets())
+  - 0x3a98ef39 (totalShares())
+  - 0x18160ddd (totalSupply())
+Adding 11 functions from 0xe1D682f619044Ad9B4CD9AFbFf5fF25104e05bE4
+  - 0x062776bf (collectAccumulatedFees())
+  - 0x4e1aa9ef (performDailyUpdate())
+  - 0xa42dce80 (setFeeCollector(address))
+  - 0xe458d453 (setLidoWithdrawalAddress(address))
+  - 0x37214ad0 (setReceiverContract(address))
+  - 0xd259ab42 (setSwapContract(address))
+  - 0x8024e968 (setWstETHAddress(address))
+  - 0xd907813c (toggleDeposits())
+  - 0x29175b8c (toggleEmergencyShutdown())
+  - 0x2f2a9165 (triggerDailyUpdate())
+  - 0x44240440 (updateWstETHBalance(address,uint256))
+6. Executing diamond cut...
+Adding 6 facets to diamond...
+Transaction hash: 0xfbe750c06ce0147cc3f69544b45d15dbcc16d0a2ba715014bfac4320d2d2c217
+Diamond cut completed in block 3692701
+7. Verifying deployment...
+
+Registered facets:
+- Address: 0x2a28560CFA13c23A2fDcde04B8080ebaa363471c | Selectors: 1
+- Address: 0x08D3ad4cd291D5709807069e61980c2Da5959959 | Selectors: 4
+- Address: 0x6517aBdADF61C8C24Cc4772b200F55de811D70f8 | Selectors: 3
+- Address: 0xeE7f0B026A87f1DB8051Bc0752c5b5fE1b49e5C4 | Selectors: 6
+- Address: 0x2a9c6D464bf2D4bc270499827BF2c1af295dafeD | Selectors: 6
+- Address: 0x78A7EDCDa994c5430d78B4c371E0864dA6e9EeD8 | Selectors: 13
+- Address: 0xe1D682f619044Ad9B4CD9AFbFf5fF25104e05bE4 | Selectors: 11
+
+Diamond owner: 0x9aD95Ef94D945B039eD5E8059603119b61271486
+
+Vault initialized. Total assets: 0
+
+Deployment complete!
+Diamond address (main contract): 0x09AB15E29783AEC3cbd4F22797c3d9Db329B5B71

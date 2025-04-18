@@ -35,7 +35,6 @@ interface IReceiver {
 
 contract WithdrawFacet is Modifiers {
     using SafeERC20 for IERC20;
-    using SafeMath for uint256;
     using Math for uint256;
 
     // Error definitions
@@ -90,7 +89,7 @@ contract WithdrawFacet is Modifiers {
         for (uint256 i = 0; i < ds.userStakedDeposits[_owner].length; i++) {
             if (
                 block.timestamp >=
-                ds.userStakedDeposits[_owner][i].timestamp + ds.LOCK_PERIOD
+                ds.userStakedDeposits[_owner][i].timestamp + DiamondStorage.LOCK_PERIOD
             ) {
                 withdrawableAmount += ds.userStakedDeposits[_owner][i].amount;
             }
@@ -184,7 +183,7 @@ contract WithdrawFacet is Modifiers {
 
         // Update fee accounting
         if (fee > 0) {
-            ds.accumulatedFees = ds.accumulatedFees.add(fee);
+            ds.accumulatedFees += fee;
             emit PerformanceFeeCollected(user, fee);
         }
 
@@ -193,10 +192,10 @@ contract WithdrawFacet is Modifiers {
         if (sharesMinted == 0) revert NoSharesToMint();
 
         // Update global state
-        ds.totalStakedValue = ds.totalStakedValue.sub(withdrawnAmount);
-        ds.totalAssets = ds.totalAssets.add(userAmount);
-        ds.totalShares = ds.totalShares.add(sharesMinted);
-        ds.balances[user] = ds.balances[user].add(sharesMinted);
+        ds.totalStakedValue -= withdrawnAmount;
+        ds.totalAssets += userAmount;
+        ds.totalShares += sharesMinted;
+        ds.balances[user] += sharesMinted;
 
         // Emit events
         emit WithdrawalProcessed(
@@ -227,7 +226,7 @@ contract WithdrawFacet is Modifiers {
 
         // Calculate minimum expected USDC with slippage protection
         uint256 minExpectedUSDC = (withdrawnAmount *
-            ds.AUTO_WITHDRAWAL_SLIPPAGE) / 1000;
+            DiamondStorage.AUTO_WITHDRAWAL_SLIPPAGE) / 1000;
 
         // Process the withdrawal
         this.processCompletedWithdrawals(user, minExpectedUSDC);
@@ -253,7 +252,7 @@ contract WithdrawFacet is Modifiers {
             if (
                 !ds.userStakedDeposits[user][i].withdrawn &&
                 block.timestamp >=
-                ds.userStakedDeposits[user][i].timestamp + ds.LOCK_PERIOD
+                ds.userStakedDeposits[user][i].timestamp + DiamondStorage.LOCK_PERIOD
             ) {
                 totalWstETHToWithdraw += ds
                 .userStakedDeposits[user][i].wstETHAmount;
@@ -288,13 +287,12 @@ contract WithdrawFacet is Modifiers {
 
     // Utility functions
     function calculateFee(uint256 yield) internal pure returns (uint256) {
-        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
         if (yield == 0) return 0;
 
-        uint256 fee = yield.mul(ds.PERFORMANCE_FEE).div(ds.FEE_DENOMINATOR);
+        uint256 fee = (yield*DiamondStorage.PERFORMANCE_FEE)/(DiamondStorage.FEE_DENOMINATOR);
 
         // Don't charge minimum fee if yield is too small
-        if (yield <= ds.MINIMUM_FEE) {
+        if (yield <= DiamondStorage.MINIMUM_FEE) {
             return yield;
         }
 

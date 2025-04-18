@@ -33,7 +33,7 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts"
-  ],
+, "Vault_forge/src/Diamond_strategy/deploy/Deploy.js"  ],
   "exclude": [
     "node_modules"
   ]

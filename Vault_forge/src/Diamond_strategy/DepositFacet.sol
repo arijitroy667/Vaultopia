@@ -74,7 +74,7 @@ contract DepositFacet is Modifiers {
         // Validations
         if (assets == 0) revert ZeroAmount();
         if (ds.depositsPaused) revert DepositsPaused();
-        if (assets < ds.MIN_DEPOSIT_AMOUNT) revert MinimumDepositNotMet();
+        if (assets < DiamondStorage.MIN_DEPOSIT_AMOUNT) revert MinimumDepositNotMet();
         if (ds.emergencyShutdown) revert EmergencyShutdown();
         
         // Calculate shares
@@ -98,7 +98,7 @@ contract DepositFacet is Modifiers {
         }
         
         // Calculate staking portion (40%)
-        uint256 amountToStake = (assets * ds.STAKED_PORTION) / 100;
+        uint256 amountToStake = (assets * DiamondStorage.STAKED_PORTION) / 100;
         
         // Get expected ETH with 1% slippage tolerance
         uint256 expectedEth = ISwapContract(ds.swapContract).getETHAmountOut(amountToStake);
@@ -123,7 +123,7 @@ contract DepositFacet is Modifiers {
         emit StakeInitiated(
             receiver,
             amountToStake,
-            block.timestamp + ds.LOCK_PERIOD
+            block.timestamp + DiamondStorage.LOCK_PERIOD
         );
         
         return shares;
@@ -204,13 +204,13 @@ contract DepositFacet is Modifiers {
         emit SwapInitiated(
             beneficiary,
             amountToStake,
-            block.timestamp + ds.LOCK_PERIOD
+            block.timestamp + DiamondStorage.LOCK_PERIOD
         );
         emit WstETHBalanceUpdated(beneficiary, amountToStake, wstETHReceived);
         emit StakeInitiated(
             beneficiary,
             amountToStake,
-            block.timestamp + ds.LOCK_PERIOD
+            block.timestamp + DiamondStorage.LOCK_PERIOD
         );
 
         // Reset approval
@@ -222,12 +222,11 @@ contract DepositFacet is Modifiers {
     function queueLargeDeposit() external {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
         if (ds.largeDepositUnlockTime[msg.sender] != 0) revert DepositAlreadyQueued();
-        ds.largeDepositUnlockTime[msg.sender] = block.timestamp + ds.DEPOSIT_TIMELOCK;
+        ds.largeDepositUnlockTime[msg.sender] = block.timestamp + DiamondStorage.DEPOSIT_TIMELOCK;
     }
 
     // Helper functions moved to ViewFacet
     function previewDeposit(uint256 assets) public view returns (uint256) {
-        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
         if (assets == 0) revert ZeroAmount();
         return convertToShares(assets);
     }
@@ -245,8 +244,8 @@ contract DepositFacet is Modifiers {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
         uint256 deposited = ds.userDeposits[receiver];
         return
-            deposited >= ds.MAX_DEPOSIT_PER_USER
+            deposited >= DiamondStorage.MAX_DEPOSIT_PER_USER
                 ? 0
-                : ds.MAX_DEPOSIT_PER_USER - deposited;
+                : DiamondStorage.MAX_DEPOSIT_PER_USER - deposited;
     }
 }
