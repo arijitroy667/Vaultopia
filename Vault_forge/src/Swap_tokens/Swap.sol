@@ -1,6 +1,4 @@
 // // SPDX-License-Identifier: MIT
-
-// // already deployed in repo- Uniswap-Holesky : UniswapV2Router02.sol
 // pragma solidity =0.5.16;
 
 // import "./interfaces/IUniswapV2Factory.sol";

@@ -1,5 +1,6 @@
 // src/services/depositService.ts
 import { ethers } from 'ethers';
+import { toast } from 'sonner';
 
 // ABI snippets for the functions we need
 const DIAMOND_ABI = [
@@ -153,13 +154,41 @@ export async function approveAndDeposit(
   receiver: string
 ) {
   try {
+    const totalAssets = await diamondContract.totalAssets();
+    const parsedAmount = ethers.parseUnits(amount.toString(), 6); // Assuming USDC is 6 decimals
+    
+    if (parsedAmount > totalAssets / BigInt(10)) {
+      // Try to check if already queued
+      try {
+        // If this call succeeds, deposit is already queued
+        await diamondContract.deposit.estimateGas(parsedAmount, receiver);
+        console.log("Deposit already queued, proceeding");
+      } catch (error: any) {
+        // If we get LargeDepositNotTimelocked, need to queue
+        if (error.data === "0x1297a3a7") {
+          console.log("Queueing large deposit...");
+          const queueTx = await diamondContract.queueLargeDeposit();
+          await queueTx.wait();
+          
+          toast.info("Large deposit queued", {
+            description: "Your deposit has been queued. Please try again in 1 hour."
+          });
+          
+          // Early return - don't proceed with deposit
+          throw new Error("Deposit queued. Please try again after 1 hour.");
+        } else {
+          // Different error, pass it along
+          throw error;
+        }
+      }
+    }
+
     // Log useful debug info
     console.log("Starting deposit process:", { amount, receiver });
 
     // Check USDC balance first
     const userBalance = await usdcContract.balanceOf(receiver);
     const decimals = await usdcContract.decimals();
-    const parsedAmount = ethers.parseUnits(amount.toString(), decimals);
     
     console.log("Balance check:", {
       userBalance: userBalance.toString(),
@@ -188,7 +217,6 @@ export async function approveAndDeposit(
     }
 
     // Check for large deposit and handle timelock
-    const totalAssets = await diamondContract.totalAssets();
     const largeDepositThreshold = totalAssets / BigInt(10);
     
     console.log("Large deposit check:", { 
