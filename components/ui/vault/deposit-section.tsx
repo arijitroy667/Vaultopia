@@ -54,6 +54,15 @@ export function DepositSection() {
     try {
       // Initialize contracts with ethers v6
       const signer = await provider.getSigner();
+
+      if (!diamondAddress || !usdcAddress) {
+        console.error("Contract addresses not found in environment variables");
+        toast.error("Configuration Error", {
+          description: "Contract addresses are not properly configured."
+        });
+        return;
+      }
+
       const usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, signer);
       const diamondContract = new ethers.Contract(diamondAddress, DIAMOND_ABI, signer);
 
@@ -79,9 +88,9 @@ export function DepositSection() {
 
       // Step 3: Check if deposit is large (>10% of vault)
       const totalAssets = await diamondContract.totalAssets();
-      const isFirstDeposit = ethers.getBigInt(totalAssets) === 0n;
+      const isFirstDeposit = ethers.getBigInt(totalAssets) === BigInt(0);
       const isLargeDeposit = !isFirstDeposit && 
-        ethers.getBigInt(amountWei) > ethers.getBigInt(totalAssets) / 10n;
+        ethers.getBigInt(amountWei) > ethers.getBigInt(totalAssets) / BigInt(10);
       
       if (isLargeDeposit) {
         toast.info("Large deposit detected", {
@@ -127,7 +136,7 @@ export function DepositSection() {
       
       toast.info("Depositing USDC...");
       const tx = await diamondContract.deposit(amountWei, address, {
-        gasLimit: 1000000n, // Higher limit for complex operation
+        gasLimit: BigInt(1000000), // Higher limit for complex operation
         maxFeePerGas: feeData.maxFeePerGas, 
         maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
       });
@@ -241,11 +250,11 @@ export function DepositSection() {
           </div>
 
           {Number.parseFloat(amount) > 0 && (
-            <div className="rounded-lg bg-yellow-50 dark:bg-yellow-950/30 p-3 text-xs flex items-start gap-2 text-yellow-800 dark:text-yellow-400">
+            <div className="rounded-lg bg-yellow-50 dark:bg-yellow-950/30 p-3 text-xs flex items-start gap-2 text-cyan-800 dark:text-cyan-400">
               <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <div>
                 <p className="font-medium">Deposit Info</p>
-                <p className="mt-1">40% of your deposit will be staked via Lido to generate yield. Staked assets have a 7-day withdrawal period.</p>
+                <p className="mt-1">40% of your deposit will be staked via Lido to generate yield. Staked assets have a 30-day Lock-in period.</p>
               </div>
             </div>
           )}

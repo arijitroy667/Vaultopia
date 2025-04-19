@@ -17,6 +17,7 @@ interface WalletContextType {
   balance: number;
   usdcBalance: number;
   provider: ethers.BrowserProvider | null;
+  signer: ethers.JsonRpcSigner | null;
   connect: () => Promise<void>;
   disconnect: () => void;
 }
@@ -29,6 +30,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [balance, setBalance] = useState(0);
   const [usdcBalance, setUsdcBalance] = useState(0);
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
+  const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
 
   const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
   const USDC_ABI = [
@@ -55,6 +57,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const etherprovider = new ethers.BrowserProvider(window.ethereum);
       setProvider(etherprovider);
       const signer = await etherprovider.getSigner();
+      setSigner(signer);
       const userAddress = await signer.getAddress();
       const userBalance = await etherprovider.getBalance(userAddress);
       const formattedBalance = Number(ethers.formatEther(userBalance));
@@ -92,6 +95,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setBalance(0);
     setUsdcBalance(0);
     setProvider(null);
+    setSigner(null);
 
     toast.info("Wallet disconnected", {
       description: "Your wallet has been disconnected",
@@ -102,7 +106,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const isAdmin = address.toLowerCase() === "0x1234567890123456789012345678901234567890".toLowerCase();
 
   return (
-    <WalletContext.Provider value={{ isConnected, isAdmin, address, balance,usdcBalance,provider, connect, disconnect }}>
+    <WalletContext.Provider value={{ isConnected, isAdmin, address, balance,usdcBalance,provider,signer, connect, disconnect }}>
       {children}
     </WalletContext.Provider>
   );

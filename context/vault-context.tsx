@@ -86,6 +86,14 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     try {
       if (!signer) return;
 
+      if (!diamondAddress || !usdcAddress) {
+        console.error("Contract addresses not found in environment variables");
+        toast.error("Configuration Error", {
+          description: "Contract addresses are not properly configured."
+        });
+        return;
+      }
+      
       const diamond = new ethers.Contract(diamondAddress, DIAMOND_ABI, signer);
       const usdc = new ethers.Contract(usdcAddress, USDC_ABI, signer);
       
@@ -107,7 +115,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     // Calculate exchange rate (assets per share)
     // If no shares exist yet, use 1.0 as default exchange rate
     let exchangeRate = 1.0;
-    if (ethers.getBigInt(totalShares) > 0n) {
+    if (ethers.getBigInt(totalShares) > BigInt(0)) {
       exchangeRate = Number(ethers.formatUnits(totalAssets, 6)) / 
                      Number(ethers.formatUnits(totalShares, 18));
     }
@@ -173,9 +181,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     
     // Check if deposit is large (>10% of vault)
     const totalAssets = await diamondContract.totalAssets();
-    const isFirstDeposit = ethers.getBigInt(totalAssets) === 0n;
+    const isFirstDeposit = ethers.getBigInt(totalAssets) === BigInt(0);
     const isLargeDeposit = !isFirstDeposit && 
-      ethers.getBigInt(amountWei) > ethers.getBigInt(totalAssets) / 10n;
+      ethers.getBigInt(amountWei) > ethers.getBigInt(totalAssets) / BigInt(10);
     
     if (isLargeDeposit) {
       try {
@@ -204,7 +212,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     
     // Execute deposit
     const tx = await diamondContract.deposit(amountWei, userAddress, {
-      gasLimit: 1000000n,
+      gasLimit: BigInt(1000000),
       maxFeePerGas: feeData.maxFeePerGas,
       maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
     });
