@@ -22,7 +22,7 @@ const USDC_ABI = [
 // Connect to the network
 async function connectToNetwork() {
   const provider = new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_ALCHEMY_URL);
-  const wallet = new ethers.Wallet(process.env.NEXT_PUBLIC_PRIVATE_KEY, provider);
+  const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
   console.log(`Connected with address: ${wallet.address}`);
   return { provider, wallet };
 }
@@ -92,7 +92,9 @@ async function approveUSDC(usdcContract, spender, amount) {
 // Queue a large deposit if needed
 async function queueLargeDeposit(diamondContract, totalAssets, depositAmount) {
   // Check if deposit is large (>10% of total assets)
-  const largeDepositThreshold = totalAssets.div(10);
+  const largeDepositThreshold = totalAssets.isZero() ? 
+      ethers.constants.MaxUint256 : // No timelock for first deposit
+      totalAssets.div(10);
   
   if (depositAmount.gt(largeDepositThreshold)) {
     console.log(`Large deposit detected (>10% of vault). Queueing timelock...`);
@@ -122,7 +124,7 @@ async function previewDeposit(diamondContract, amount) {
 }
 
 // Deposit USDC to vault
-async function deposit(diamondContract, usdcContract, amount, receiver) {
+async function deposit(diamondContract, usdcContract, amount, receiver, feeData) {
   console.log(`Initiating deposit of ${ethers.utils.formatUnits(amount, 6)} USDC...`);
   
   // Check if we have enough USDC
@@ -157,15 +159,16 @@ async function deposit(diamondContract, usdcContract, amount, receiver) {
   // Preview shares to be received
   const expectedShares = await diamondContract.previewDeposit(amount);
   console.log(`Expected shares from deposit: ${ethers.utils.formatUnits(expectedShares)}`);
-  
   // Execute deposit
   try {
     console.log(`Executing deposit...`);
     const tx = await diamondContract.deposit(amount, receiver, {
-      gasLimit: 1000000 // Higher gas limit for complex operations
+      gasLimit: 1000000, // Higher gas limit for complex operations
+      maxFeePerGas: feeData.maxFeePerGas,
+      maxFeePriorityFeePerGas: feeData.maxPriorityFeePerGas
     });
     console.log(`Deposit transaction sent: ${tx.hash}`);
-    await tx.wait();
+    await tx.wait(3);
     console.log(`Deposit successful!`);
     
     // Check updated balances
@@ -182,7 +185,8 @@ async function deposit(diamondContract, usdcContract, amount, receiver) {
 // Main function to execute a deposit
 async function main() {
   try {
-    const { wallet } = await connectToNetwork();
+    // Connect to network and contracts
+    const { provider, wallet } = await connectToNetwork();
     const { diamondContract, usdcContract } = await connectToContracts(wallet);
     
     // Set deposit amount (e.g., 100 USDC with 6 decimals)
@@ -192,8 +196,11 @@ async function main() {
     await checkUSDCBalance(usdcContract, wallet.address);
     await checkVaultBalance(diamondContract, wallet.address);
     
+    // Get fee data for gas estimation
+    const feeData = await provider.getFeeData();
+    
     // Execute deposit
-    await deposit(diamondContract, usdcContract, depositAmount, wallet.address);
+    await deposit(diamondContract, usdcContract, depositAmount, wallet.address, feeData);
     
   } catch (error) {
     console.error(`Unhandled error: ${error.message}`);
