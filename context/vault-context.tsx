@@ -179,7 +179,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     exchangeRate: 1.0,
     currentFee: 2.0,
   })
-
+  
   // Contract addresses from environment variables
   const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
   const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
