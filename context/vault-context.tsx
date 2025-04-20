@@ -183,7 +183,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // Contract addresses from environment variables
   const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
   const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
-  
+  console.log("Diamond Address:", diamondAddress);
   // Initialize contracts when wallet connects
   useEffect(() => {
     if (isConnected && provider && signer) {
