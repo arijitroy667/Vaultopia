@@ -19,6 +19,24 @@ export function DashboardPage() {
   const { isConnected, isAdmin } = useWallet()
   const { vaultData } = useVault()
 
+  useEffect(() => {
+    // Handle URL hash for direct tab access
+    const hash = window.location.hash.replace('#', '');
+    if (hash && ['dashboard', 'deposit', 'withdraw', 'history'].includes(hash)) {
+      setActiveTab(hash);
+    }
+
+    const handleHashChange = () => {
+      const newHash = window.location.hash.replace('#', '');
+      if (newHash && ['dashboard', 'deposit', 'withdraw', 'history'].includes(newHash)) {
+        setActiveTab(newHash);
+      }
+    };
+    
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="mt-10 ml-8 mr-8">
@@ -270,10 +288,11 @@ function MetricCard({ label, value, change }) {
 
 // Animated background with particles
 function ParticleBackground() {
-  const canvasRef = useRef(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
+    if (!canvas) return
     const ctx = canvas.getContext("2d")
     let animationFrameId
 

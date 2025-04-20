@@ -20,7 +20,9 @@ const DIAMOND_ABI = [
   "function maxWithdraw(address owner) external view returns (uint256)",
   "function getWithdrawableAmount(address user) external view returns (uint256)",
   "function getLockedAmount(address user) external view returns (uint256)",
-  "function getUnlockTime(address user) external view returns (uint256[])"
+  "function getUnlockTime(address user) external view returns (uint256[])",
+  "event Deposit(address indexed caller, address indexed owner, uint256 assets, uint256 shares)",
+  "event Withdraw(address indexed caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)"
 ];
 
 const USDC_ABI = [
@@ -36,6 +38,8 @@ interface Transaction {
   shares: number
   timestamp: number
   status: "pending" | "completed" | "failed"
+  txHash?: string        // Transaction hash for blockchain explorer links
+  blockNumber?: number   // Block number for additional context
 }
 
 interface VaultData {
@@ -51,6 +55,7 @@ interface VaultContextType {
   vaultData: VaultData
   userShares: number
   transactions: Transaction[]
+  isLoading: boolean
   deposit: (amount: number) => Promise<void>
   withdraw: (amount: number) => Promise<void>
   setFee: (fee: number) => Promise<void>
@@ -66,7 +71,105 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [diamondContract, setDiamondContract] = useState<ethers.Contract | null>(null)
   const [usdcContract, setUsdcContract] = useState<ethers.Contract | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
 
+  const loadTransactionHistory = async () => {
+    if (!isConnected || !address || !diamondContract || !provider) return;
+    
+    setIsLoading(true);
+  try {
+    // Define event filters for this specific user
+    const depositFilter = diamondContract.filters.Deposit(null, address);
+    const withdrawFilter = diamondContract.filters.Withdraw(null, address, address);
+    
+    // Get the current block
+    const currentBlock = await provider.getBlockNumber();
+    
+    const maxBlockRange = 90000;
+    
+    // Start with most recent blocks
+    let endBlock = currentBlock;
+    let startBlock = Math.max(0, endBlock - maxBlockRange);
+    const allDepositEvents = [];
+    const allWithdrawEvents = [];
+    
+    // Query at most 3 chunks (covering ~6 weeks)
+    const maxChunks = 3;
+    let chunks = 0;
+    
+    while (startBlock <= endBlock && chunks < maxChunks) {
+      try {
+        // Fetch events in parallel for this chunk
+        console.log(`Querying events from block ${startBlock} to ${endBlock}`);
+        const [depositEvents, withdrawEvents] = await Promise.all([
+          diamondContract.queryFilter(depositFilter, startBlock, endBlock),
+          diamondContract.queryFilter(withdrawFilter, startBlock, endBlock)
+        ]);
+        
+        // Add events to our collection
+        allDepositEvents.push(...depositEvents);
+        allWithdrawEvents.push(...withdrawEvents);
+        
+        // Move to previous chunk of blocks
+        endBlock = startBlock - 1;
+        startBlock = Math.max(0, endBlock - maxBlockRange);
+        chunks++;
+        
+        // If we didn't find any events and this is the first chunk, no need to look further
+        if (chunks === 1 && depositEvents.length === 0 && withdrawEvents.length === 0) {
+          break;
+        }
+      } catch (chunkError) {
+        console.error("Error querying block range:", chunkError);
+        break; // Stop on error
+      }
+    }
+    
+    // Process deposit events
+    const depositTransactions = await Promise.all(allDepositEvents.map(async (event) => {
+      const block = await event.getBlock();
+      const typedEvent = event as ethers.EventLog;
+      return {
+        type: "deposit",
+        amount: Number(ethers.formatUnits(typedEvent.args.assets, 6)), // USDC has 6 decimals
+        shares: Number(ethers.formatUnits(typedEvent.args.shares, 18)), // Shares have 18 decimals
+        timestamp: block?.timestamp ? block.timestamp * 1000 : Date.now(),
+        status: "completed",
+        txHash: event.transactionHash
+      } as Transaction;
+    }));
+    
+    // Process withdrawal events
+    const withdrawTransactions = await Promise.all(allWithdrawEvents.map(async (event) => {
+      const block = await event.getBlock();
+      const typedEvent = event as ethers.EventLog;
+      return {
+        type: "withdraw",
+        amount: Number(ethers.formatUnits(typedEvent.args.assets, 6)),
+        shares: Number(ethers.formatUnits(typedEvent.args.shares, 18)),
+        timestamp: block?.timestamp ? block.timestamp * 1000 : Date.now(),
+        status: "completed",
+        txHash: event.transactionHash
+      } as Transaction;
+    }));
+    
+    // Combine and sort all transactions by timestamp (newest first)
+    const allTransactions = [...depositTransactions, ...withdrawTransactions]
+      .sort((a, b) => b.timestamp - a.timestamp);
+    
+    // Update transactions state with historical data
+    setTransactions(prev => {
+      // Keep any pending transactions that might not be on-chain yet
+      const pendingTx = prev.filter(tx => tx.status === "pending");
+      return [...pendingTx, ...allTransactions];
+    });
+    
+  } catch (error) {
+    console.error("Error loading transaction history:", error);
+  } finally {
+    setIsLoading(false);
+  }
+};
   // Default vault data
   const [vaultData, setVaultData] = useState<VaultData>({
     tvl: 0,
@@ -88,6 +191,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     }
   }, [isConnected, provider, signer]);
 
+  useEffect(() => {
+    if (isConnected && address && diamondContract) {
+      loadTransactionHistory();
+    }
+  }, [isConnected, address, diamondContract]);
   const initializeContracts = async () => {
     try {
       if (!signer) return;
@@ -157,6 +265,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       // Get user's shares
       const shares = await getUserShares(diamondContract, address);
       setUserShares(shares);
+
+      // Also refresh transaction history when data is refreshed
+    await loadTransactionHistory();
       
     } catch (error) {
       console.error("Failed to refresh vault data:", error);
@@ -433,6 +544,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         vaultData,
         userShares,
         transactions,
+        isLoading,
         deposit,
         withdraw,
         setFee,
