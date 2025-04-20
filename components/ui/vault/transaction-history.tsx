@@ -333,7 +333,6 @@ export function TransactionHistory() {
         // Set it directly if it's not already deposit
         window.location.hash = "deposit";
       }
-      
       // As backup, try clicking the tab directly
       setTimeout(() => {
         const depositTrigger = document.querySelector('[role="tab"][value="deposit"]');
