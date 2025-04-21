@@ -91,7 +91,7 @@
 
 "use client"
 
-import { useState } from "react"
+import { useState,useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -104,7 +104,7 @@ export function TransactionHistory() {
   const [filter, setFilter] = useState("all")
   const { transactions, refreshVaultData, isLoading } = useVault()
   const [visibleCount, setVisibleCount] = useState(5)
-
+  
   const filteredTransactions = transactions.filter((tx) => {
     if (filter === "all") return true
     return tx.type === filter
@@ -134,6 +134,10 @@ export function TransactionHistory() {
       timeStyle: 'short' 
     }).format(date)
   }
+
+  useEffect(() => {
+    refreshVaultData(true); // true = include transactions
+  }, [refreshVaultData]);
   
   const formatTimeAgo = (timestamp) => {
     const secondsAgo = Math.floor((Date.now() - timestamp) / 1000)

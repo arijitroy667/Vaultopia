@@ -250,11 +250,11 @@ export function DepositSection() {
           </div>
 
           {Number.parseFloat(amount) > 0 && (
-            <div className="rounded-lg bg-yellow-50 dark:bg-yellow-950/30 p-3 text-xs flex items-start gap-2 text-cyan-800 dark:text-cyan-400">
+            <div className="rounded-lg bg-yellow-50 dark:bg-cyan-950/30 p-3 text-xs flex items-start gap-2 text-cyan-800 dark:text-cyan-400">
               <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <div>
                 <p className="font-medium">Deposit Info</p>
-                <p className="mt-1">40% of your deposit will be staked via Lido to generate yield. Staked assets have a 30-day Lock-in period.</p>
+                <p className="mt-1"><b className="text-orange-500">40%</b> of your deposit will be staked via Lido to generate yield. Staked assets have a <b className="text-orange-500">30-day Lock-in period.</b></p>
               </div>
             </div>
           )}

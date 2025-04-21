@@ -17,7 +17,23 @@ import { Button } from "@/components/ui/button"
 export function DashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard")
   const { isConnected, isAdmin } = useWallet()
-  const { vaultData } = useVault()
+  const { vaultData, refreshVaultData, isLoading } = useVault()
+
+  const formatCurrency = (value) => {
+    return parseFloat(value.toFixed(2)).toLocaleString()
+  }
+  
+  // Only do a light refresh of vault data (without transactions)
+  // when the dashboard loads
+  useEffect(() => {
+    if (isConnected) {
+      refreshVaultData(false); // false = don't load transactions
+      
+      // Still refresh periodically, but without transaction history
+      const refreshInterval = setInterval(() => refreshVaultData(false), 60000);
+      return () => clearInterval(refreshInterval);
+    }
+  }, [isConnected, refreshVaultData]);
 
   useEffect(() => {
     // Handle URL hash for direct tab access
@@ -63,6 +79,7 @@ export function DashboardPage() {
             <Button variant="outline" className="border-cyan-500/50 text-cyan-500 hover:bg-cyan-950/30 border-cyan-500">
               Documentation
             </Button>
+            {isConnected && <WalletConnect />}
           </motion.div>
         </nav>
       </header>
@@ -154,29 +171,65 @@ export function DashboardPage() {
                   </motion.div>
 
                   <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.7, delay: 0.3 }}
-                    className="mb-8"
-                  >
-                    <div className="p-0.5 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-500">
-                      <div className="bg-black/80 backdrop-blur-sm rounded-lg p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <div className="flex items-center gap-2">
-                            <div className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
-                            <span className="text-sm text-gray-400">Live Metrics</span>
-                          </div>
-                          <span className="text-xs text-gray-500">Updated 2 minutes ago</span>
-                        </div>
+  initial={{ opacity: 0, y: 20 }}
+  animate={{ opacity: 1, y: 0 }}
+  transition={{ duration: 0.7, delay: 0.3 }}
+  className="mb-8"
+>
+  <div className="p-0.5 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-500">
+    <div className="bg-black/80 backdrop-blur-sm rounded-lg p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
+          <span className="text-sm text-gray-400">Live Metrics</span>
+        </div>
+        <span className="text-xs text-gray-500">Auto-refreshing</span>
+      </div>
 
-                        <div className="grid grid-cols-3 gap-4">
-                          <MetricCard label="TVL" value="$4.2M" change="+12.5%" />
-                          <MetricCard label="APY" value="8.4%" change="+0.3%" />
-                          <MetricCard label="Users" value="1,240" change="+64" />
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
+      <div className="grid grid-cols-3 gap-4">
+        {isLoading ? (
+          // Show skeleton loaders if data is loading
+          <>
+            <div className="bg-slate-900/50 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">TVL</div>
+              <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
+              <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
+            </div>
+            <div className="bg-slate-900/50 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">APY</div>
+              <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
+              <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
+            </div>
+            <div className="bg-slate-900/50 rounded-lg p-3">
+              <div className="text-xs text-gray-500 mb-1">Fee</div>
+              <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
+              <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
+            </div>
+          </>
+        ) : (
+          // Show actual data when loaded
+          <>
+            <MetricCard 
+              label="TVL" 
+              value={`$${formatCurrency(vaultData.tvl)}`} 
+              change={`${vaultData.tvlChange >= 0 ? '+' : ''}${vaultData.tvlChange}%`} 
+            />
+            <MetricCard 
+              label="APY" 
+              value={`${vaultData.apy}%`} 
+              change="+0.3%" 
+            />
+            <MetricCard 
+              label="Total Shares" 
+              value={formatCurrency(vaultData.totalShares)} 
+              change={`$${formatCurrency(vaultData.exchangeRate)}/share`} 
+            />
+          </>
+        )}
+      </div>
+    </div>
+  </div>
+</motion.div>
                 </div>
 
                 <motion.div
