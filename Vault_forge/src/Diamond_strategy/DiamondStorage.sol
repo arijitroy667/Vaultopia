@@ -12,7 +12,7 @@ library DiamondStorage {
     uint256 constant INSTANT_WITHDRAWAL_LIMIT = 60;
     uint256 constant UPDATE_INTERVAL = 1 days;
     uint256 constant PERFORMANCE_FEE = 300; // 3%
-    uint256 constant MIN_DEPOSIT_AMOUNT = 100 * 1e6; // 100 USDC minimum
+    uint256 constant MIN_DEPOSIT_AMOUNT = 1 * 1e6; // 1 USDC minimum
     uint256 constant DEPOSIT_TIMELOCK = 1 hours;
     uint256 constant FEE_DENOMINATOR = 10000;
     uint256 constant MINIMUM_FEE = 1e6; // 1 USDC minimum fee
