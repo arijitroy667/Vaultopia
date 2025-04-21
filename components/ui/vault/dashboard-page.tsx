@@ -49,9 +49,14 @@ export function DashboardPage() {
       // Set up auto-refresh interval
       const refreshInterval = setInterval(() => {
         refreshVaultData();
-        // Refresh APY less frequently since it doesn't change as often
-        if (Math.random() > 0.7) fetchLidoAPY(); // ~30% chance to refresh APY on each interval
-      }, 60000);
+        // Only refresh APY once per hour at most
+        const lastFetchTime = localStorage.getItem('lastApyFetchTime');
+        if (!lastFetchTime || (Date.now() - parseInt(lastFetchTime)) > 3600000) {
+          fetchLidoAPY().then(() => {
+            localStorage.setItem('lastApyFetchTime', Date.now().toString());
+          });
+        }
+      }, 600000); // Refresh every 10 minutes
       
       return () => clearInterval(refreshInterval);
     }
@@ -334,24 +339,6 @@ function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
   const { fetchLidoAPY } = useVault();
   const [localLoading, setLocalLoading] = useState(false);
   
-  // Add this effect to ensure APY is loaded
-  useEffect(() => {
-    if (!vaultData?.apy && !isLoading && !localLoading) {
-      const loadAPY = async () => {
-        setLocalLoading(true);
-        try {
-          await fetchLidoAPY();
-        } catch (error) {
-          console.error("Failed to load APY:", error);
-        } finally {
-          setLocalLoading(false);
-        }
-      };
-      
-      loadAPY();
-    }
-  }, [vaultData?.apy, isLoading, localLoading, fetchLidoAPY]);
-
   const refreshAPY = async () => {
     try {
       setLocalLoading(true);
@@ -362,6 +349,17 @@ function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
       setLocalLoading(false);
     }
   };
+
+  // Add this effect to ensure APY is loaded
+  useEffect(() => {
+    if (!vaultData?.apy && !isLoading && !localLoading) {
+      const lastAttempt = sessionStorage.getItem('apyLoadAttempt');
+      if (!lastAttempt || (Date.now() - parseInt(lastAttempt)) > 60000) {
+        sessionStorage.setItem('apyLoadAttempt', Date.now().toString());
+        refreshAPY(); // Changed from loadAPY() to refreshAPY()
+      }
+    }
+  }, [vaultData?.apy, isLoading, localLoading, refreshAPY]);
   
   if (isLoading) {
     return (

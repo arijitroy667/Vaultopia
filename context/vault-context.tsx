@@ -75,6 +75,20 @@ interface VaultContextType {
   fetchLidoAPY: () => Promise<number | null>;
 }
 
+function debounce<T>(func: (...args: any[]) => Promise<T>, wait: number) {
+  let timeout: NodeJS.Timeout;
+  return function executedFunction(...args: any[]): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const later = () => {
+        clearTimeout(timeout);
+        func(...args).then(resolve).catch(reject);
+      };
+      clearTimeout(timeout);
+      timeout = setTimeout(later, wait);
+    });
+  };
+}
+
 const VaultContext = createContext<VaultContextType | undefined>(undefined)
 
 export function VaultProvider({ children }: { children: ReactNode }) {
@@ -87,7 +101,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const lastRefreshTime = useRef(0)
   
-  const fetchLidoAPY = useCallback(async () => {
+  const fetchLidoAPY = useCallback(debounce(async () => {
     try {
       console.log('Fetching Lido APY...');
       const response = await fetch('https://eth-api-holesky.testnet.fi/v1/protocol/steth/apr/sma');
@@ -118,7 +132,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       
       return null;
     }
-  }, []);
+  }, 20000), []); // 20 sec debounce
 
   const loadTransactionHistory = async () => {
     if (!isConnected || !address || !diamondContract || !provider) return;
@@ -370,23 +384,23 @@ const triggerDailyUpdate = async () => {
 
   useEffect(() => {
     if (isConnected) {
-      fetchLidoAPY();
-    }
-  }, [isConnected, fetchLidoAPY]);
-
-  useEffect(() => {
-    // Only fetch if connected
-    if (isConnected) {
-      // Fetch APY immediately when component mounts
-      fetchLidoAPY();
+      // Only fetch if there's no APY value yet or it's been more than 1 hour
+      const lastFetchTime = localStorage.getItem('lastApyFetchTime');
+      const shouldFetch = !vaultData.apy || 
+        !lastFetchTime || 
+        (Date.now() - parseInt(lastFetchTime)) > 3600000; // 1 hour
       
-      // Then fetch it once every 24 hours
+      if (shouldFetch) {
+        fetchLidoAPY().then(() => {
+          localStorage.setItem('lastApyFetchTime', Date.now().toString());
+        });
+      }
+      
+      // Then fetch every 24 hours (but don't interfere with manual refreshes)
       const dailyUpdateInterval = setInterval(fetchLidoAPY, 24 * 60 * 60 * 1000);
-      
-      // Clean up interval on unmount
       return () => clearInterval(dailyUpdateInterval);
     }
-  }, [isConnected]);
+  }, [isConnected, fetchLidoAPY, vaultData.apy]);
 
   useEffect(() => {
     if (isConnected && address && diamondContract) {
