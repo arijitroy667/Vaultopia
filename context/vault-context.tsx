@@ -87,28 +87,38 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const lastRefreshTime = useRef(0)
   
-  const fetchLidoAPY = async () => {
+  const fetchLidoAPY = useCallback(async () => {
     try {
+      console.log('Fetching Lido APY...');
       const response = await fetch('https://eth-api-holesky.testnet.fi/v1/protocol/steth/apr/sma');
       const data = await response.json();
       
       // Get the SMA APR value (convert from decimal to percentage)
-      // Using the Simple Moving Average APR which is more stable
       const aprSMA = data.data.smaApr * 100;
       
-      // Update vault data with the new APY (ensure it's positive)
+      // Calculate the final APY (add premium, ensure positive)
+      const finalAPY = Math.max(parseFloat((aprSMA + 2).toFixed(2)), 0.01);
+      console.log('Lido APY fetched successfully:', finalAPY);
+      
+      // Update vault data with the new APY
       setVaultData(prev => ({
         ...prev,
-        apy: Math.max(parseFloat((aprSMA + 2).toFixed(2)), 0.01) // Add 2% for vault premium, minimum 0.01%
+        apy: finalAPY
       }));
       
-      console.log('Updated APY from Lido API:', aprSMA);
-      return aprSMA;
+      return finalAPY;
     } catch (error) {
       console.error('Failed to fetch Lido APY:', error);
+      
+      // Even on error, ensure we have a fallback APY
+      setVaultData(prev => ({
+        ...prev,
+        apy: prev.apy || 4.2 // Default fallback APY if we can't fetch
+      }));
+      
       return null;
     }
-  };
+  }, []);
 
   const loadTransactionHistory = async () => {
     if (!isConnected || !address || !diamondContract || !provider) return;
@@ -357,6 +367,12 @@ const triggerDailyUpdate = async () => {
       initializeContracts();
     }
   }, [isConnected, provider, signer]);
+
+  useEffect(() => {
+    if (isConnected) {
+      fetchLidoAPY();
+    }
+  }, [isConnected, fetchLidoAPY]);
 
   useEffect(() => {
     // Only fetch if connected

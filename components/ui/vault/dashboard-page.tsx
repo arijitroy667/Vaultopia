@@ -17,8 +17,9 @@ import { Button } from "@/components/ui/button"
 export function DashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard")
   const { isConnected, isAdmin } = useWallet()
-  const { vaultData, refreshVaultData, isLoading, fetchLidoAPY } = useVault()
-
+  const { vaultData, refreshVaultData, isLoading: vaultLoading, fetchLidoAPY } = useVault()
+  const [localLoading, setLocalLoading] = useState(false)
+  const showLoading = localLoading || vaultLoading;
   const formatCurrency = (value) => {
     if (value === undefined || value === null || isNaN(value)) return "0.00";
     return parseFloat(value.toFixed(2)).toLocaleString();
@@ -28,16 +29,33 @@ export function DashboardPage() {
   // when the dashboard loads
   useEffect(() => {
     if (isConnected) {
-      // Fetch Lido APY on mount
-      fetchLidoAPY();
+      const loadInitialData = async () => {
+        setLocalLoading(true);
+        try {
+          // Execute these in parallel for faster loading
+          await Promise.all([
+            fetchLidoAPY(),
+            refreshVaultData()
+          ]);
+        } catch (error) {
+          console.error("Error loading initial data:", error);
+        } finally {
+          setLocalLoading(false);
+        }
+      };
       
-      // Rest of existing refresh logic remains the same
-      refreshVaultData();
+      loadInitialData();
       
-      const refreshInterval = setInterval(() => refreshVaultData(false), 60000);
+      // Set up auto-refresh interval
+      const refreshInterval = setInterval(() => {
+        refreshVaultData();
+        // Refresh APY less frequently since it doesn't change as often
+        if (Math.random() > 0.7) fetchLidoAPY(); // ~30% chance to refresh APY on each interval
+      }, 60000);
+      
       return () => clearInterval(refreshInterval);
     }
-  }, [isConnected, refreshVaultData]);
+  }, [isConnected, refreshVaultData, fetchLidoAPY]);
 
   useEffect(() => {
     // Handle URL hash for direct tab access
@@ -191,7 +209,7 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        {isLoading ? (
+        {showLoading ? (
           // Show skeleton loaders if data is loading
           <>
             <div className="bg-slate-900/50 rounded-lg p-3">
@@ -220,7 +238,7 @@ export function DashboardPage() {
             />
             <APYMetricCard 
               vaultData={vaultData} 
-              isLoading={isLoading} 
+              isLoading={showLoading} 
               formatCurrency={formatCurrency} 
             />
             <MetricCard 
@@ -316,6 +334,24 @@ function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
   const { fetchLidoAPY } = useVault();
   const [localLoading, setLocalLoading] = useState(false);
   
+  // Add this effect to ensure APY is loaded
+  useEffect(() => {
+    if (!vaultData?.apy && !isLoading && !localLoading) {
+      const loadAPY = async () => {
+        setLocalLoading(true);
+        try {
+          await fetchLidoAPY();
+        } catch (error) {
+          console.error("Failed to load APY:", error);
+        } finally {
+          setLocalLoading(false);
+        }
+      };
+      
+      loadAPY();
+    }
+  }, [vaultData?.apy, isLoading, localLoading, fetchLidoAPY]);
+
   const refreshAPY = async () => {
     try {
       setLocalLoading(true);
