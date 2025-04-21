@@ -62,14 +62,30 @@
 
 "use client"
 
+import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useVault } from "@/context/vault-context"
 import { ArrowUpRight, TrendingUp, Wallet, Users, BarChart } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
+import { RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 
 export function VaultStats() {
-  const { vaultData, userShares, isLoading } = useVault()
+  const { vaultData, userShares, isLoading,fetchLidoAPY } = useVault()
+  const [localLoading, setLocalLoading] = useState(false)
 
+  const refreshAPY = async () => {
+    try {
+      setLocalLoading(true)
+      await fetchLidoAPY()
+      toast.success("APY data refreshed from Lido")
+    } catch (error) {
+      toast.error("Failed to refresh APY data")
+    } finally {
+      setLocalLoading(false)
+    }
+  }
+  
   // Format numbers with 2 decimal places
   const formatCurrency = (value) => {
     if (value === undefined || value === null || isNaN(value)) return "0.00";
@@ -103,21 +119,44 @@ export function VaultStats() {
       
       {/* Original APY Card (Restored) */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">APY</CardTitle>
-          <TrendingUp className="h-4 w-4 text-muted-foreground" />
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <Skeleton className="h-8 w-24" />
-          ) : (
-            <>
-              <div className="text-2xl font-bold">{vaultData.apy}%</div>
-              <p className="text-xs text-muted-foreground">Based on 30-day performance</p>
-            </>
-          )}
-        </CardContent>
-      </Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+  <CardTitle className="text-sm font-medium">APY</CardTitle>
+  
+  <div className="flex items-center">
+    <button 
+      onClick={refreshAPY} 
+      className="mr-2 opacity-70 hover:opacity-100 transition-opacity"
+      disabled={localLoading}
+    >
+      <RefreshCw className={`h-3 w-3 text-muted-foreground ${localLoading ? 'animate-spin' : ''}`} />
+    </button>
+    <TrendingUp className="h-4 w-4 text-muted-foreground" />
+  </div>
+</CardHeader>
+  <CardContent>
+    {isLoading ? (
+      <Skeleton className="h-8 w-24" />
+    ) : (
+      <>
+        <div className="text-2xl font-bold">
+          {formatCurrency(vaultData?.apy || 0)}%
+          <span className="ml-2 text-xs text-cyan-500 font-normal">
+            (Lido + 2%)
+          </span>
+        </div>
+        <div className="flex items-center text-xs text-muted-foreground">
+          <img 
+            src="/lido-logo.png" 
+            alt="Lido" 
+            className="h-4 w-3 mr-1" 
+            onError={(e) => e.currentTarget.style.display = 'none'} 
+          />
+          Based on last 7-day moving average
+        </div>
+      </>
+    )}
+  </CardContent>
+</Card>
       
       {/* Total Shares Card */}
       <Card>

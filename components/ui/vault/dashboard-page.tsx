@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
-import { ArrowRight, Lock, Shield, TrendingUp } from "lucide-react"
+import { ArrowRight, Lock, Shield, TrendingUp, RefreshCw } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WalletConnect } from "@/components/ui/wallet/wallet-connect"
 import { VaultStats } from "@/components/ui/vault/vault-stats"
@@ -17,19 +17,23 @@ import { Button } from "@/components/ui/button"
 export function DashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard")
   const { isConnected, isAdmin } = useWallet()
-  const { vaultData, refreshVaultData, isLoading } = useVault()
+  const { vaultData, refreshVaultData, isLoading, fetchLidoAPY } = useVault()
 
   const formatCurrency = (value) => {
-    return parseFloat(value.toFixed(2)).toLocaleString()
+    if (value === undefined || value === null || isNaN(value)) return "0.00";
+    return parseFloat(value.toFixed(2)).toLocaleString();
   }
   
   // Only do a light refresh of vault data (without transactions)
   // when the dashboard loads
   useEffect(() => {
     if (isConnected) {
-      refreshVaultData(false); // false = don't load transactions
+      // Fetch Lido APY on mount
+      fetchLidoAPY();
       
-      // Still refresh periodically, but without transaction history
+      // Rest of existing refresh logic remains the same
+      refreshVaultData();
+      
       const refreshInterval = setInterval(() => refreshVaultData(false), 60000);
       return () => clearInterval(refreshInterval);
     }
@@ -214,10 +218,10 @@ export function DashboardPage() {
               value={`$${formatCurrency(vaultData.tvl)}`} 
               change={`${vaultData.tvlChange >= 0 ? '+' : ''}${vaultData.tvlChange}%`} 
             />
-            <MetricCard 
-              label="APY" 
-              value={`${vaultData.apy}%`} 
-              change="+0.3%" 
+            <APYMetricCard 
+              vaultData={vaultData} 
+              isLoading={isLoading} 
+              formatCurrency={formatCurrency} 
             />
             <MetricCard 
               label="Total Shares" 
@@ -308,6 +312,59 @@ function TypingText({ text, className = "" }) {
   )
 }
 
+function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
+  const { fetchLidoAPY } = useVault();
+  const [localLoading, setLocalLoading] = useState(false);
+  
+  const refreshAPY = async () => {
+    try {
+      setLocalLoading(true);
+      await fetchLidoAPY();
+    } catch (error) {
+      console.error("Failed to refresh APY:", error);
+    } finally {
+      setLocalLoading(false);
+    }
+  };
+  
+  if (isLoading) {
+    return (
+      <div className="bg-slate-900/50 rounded-lg p-3">
+        <div className="text-xs text-gray-500 mb-1">APY</div>
+        <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
+        <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="bg-slate-900/50 rounded-lg p-3">
+      <div className="flex justify-between items-center">
+        <div className="text-xs text-gray-500 mb-1">APY</div>
+        <button 
+          onClick={refreshAPY}
+          className="text-xs text-gray-500 hover:text-cyan-400"
+          disabled={localLoading}
+        >
+          <RefreshCw className={`h-3 w-3 ${localLoading ? "animate-spin" : ""}`} />
+        </button>
+      </div>
+      <div className="text-xl font-bold text-white mb-1">
+        {formatCurrency(vaultData?.apy || 0)}%
+      </div>
+      <div className="flex items-center text-xs text-cyan-400">
+        Lido + 2%
+        <img 
+          src="/lido-logo.png" 
+          alt="" 
+          className="h-4 w-3 ml-1" 
+          onError={(e) => e.currentTarget.style.display = 'none'}
+        />
+      </div>
+    </div>
+  );
+}
+
 // Feature card component
 function FeatureCard({ icon, title, description }) {
   return (
@@ -328,7 +385,7 @@ function FeatureCard({ icon, title, description }) {
 
 // Metric card component
 function MetricCard({ label, value, change }) {
-  const isPositive = change.startsWith("+")
+  const isPositive = typeof change === 'string' && change.startsWith("+");
 
   return (
     <div className="bg-slate-900/50 rounded-lg p-3">

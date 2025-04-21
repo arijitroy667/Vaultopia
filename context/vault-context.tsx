@@ -62,7 +62,7 @@ interface VaultContextType {
   withdraw: (amount: number) => Promise<void>
   setFee: (fee: number) => Promise<void>
   togglePause: (paused: boolean) => Promise<void>
-  refreshVaultData: () => Promise<void>
+  refreshVaultData: (includeTransactions?: boolean) => Promise<void>
   setLidoWithdrawalAddress: (address: string) => Promise<void>;
   setWstETHAddress: (address: string) => Promise<void>;
   setReceiverContract: (address: string) => Promise<void>;
@@ -72,6 +72,7 @@ interface VaultContextType {
   collectAccumulatedFees: () => Promise<void>;
   updateWstETHBalance: (user: string, amount: number) => Promise<void>;
   triggerDailyUpdate: () => Promise<void>;
+  fetchLidoAPY: () => Promise<number | null>;
 }
 
 const VaultContext = createContext<VaultContextType | undefined>(undefined)
@@ -86,6 +87,29 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const lastRefreshTime = useRef(0)
   
+  const fetchLidoAPY = async () => {
+    try {
+      const response = await fetch('https://eth-api-holesky.testnet.fi/v1/protocol/steth/apr/sma');
+      const data = await response.json();
+      
+      // Get the SMA APR value (convert from decimal to percentage)
+      // Using the Simple Moving Average APR which is more stable
+      const aprSMA = data.data.smaApr * 100;
+      
+      // Update vault data with the new APY (ensure it's positive)
+      setVaultData(prev => ({
+        ...prev,
+        apy: Math.max(parseFloat((aprSMA + 2).toFixed(2)), 0.01) // Add 2% for vault premium, minimum 0.01%
+      }));
+      
+      console.log('Updated APY from Lido API:', aprSMA);
+      return aprSMA;
+    } catch (error) {
+      console.error('Failed to fetch Lido APY:', error);
+      return null;
+    }
+  };
+
   const loadTransactionHistory = async () => {
     if (!isConnected || !address || !diamondContract || !provider) return;
     
@@ -335,6 +359,20 @@ const triggerDailyUpdate = async () => {
   }, [isConnected, provider, signer]);
 
   useEffect(() => {
+    // Only fetch if connected
+    if (isConnected) {
+      // Fetch APY immediately when component mounts
+      fetchLidoAPY();
+      
+      // Then fetch it once every 24 hours
+      const dailyUpdateInterval = setInterval(fetchLidoAPY, 24 * 60 * 60 * 1000);
+      
+      // Clean up interval on unmount
+      return () => clearInterval(dailyUpdateInterval);
+    }
+  }, [isConnected]);
+
+  useEffect(() => {
     if (isConnected && address && diamondContract) {
       loadTransactionHistory();
     }
@@ -429,8 +467,9 @@ const triggerDailyUpdate = async () => {
         tvl: vaultInfo.tvl,
         totalShares: vaultInfo.totalShares,
         exchangeRate: vaultInfo.exchangeRate,
-        accumulatedFees,
-        lastDailyUpdate,
+        accumulatedFees: accumulatedFees || prev.accumulatedFees,
+        lastDailyUpdate: lastDailyUpdate || prev.lastDailyUpdate,
+        apy: prev.apy
       }));
       
       // Get user's shares
@@ -736,7 +775,8 @@ const triggerDailyUpdate = async () => {
       toggleEmergencyShutdown,
       collectAccumulatedFees,
       updateWstETHBalance,
-      triggerDailyUpdate
+      triggerDailyUpdate,
+      fetchLidoAPY
       }}
     >
       {children}
