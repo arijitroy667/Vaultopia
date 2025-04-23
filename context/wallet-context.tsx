@@ -103,7 +103,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   };
 
   // Check if the connected address is an admin (replace with actual admin address)
-  const isAdmin = address.toLowerCase() === "0x1234567890123456789012345678901234567890".toLowerCase();
+  const isAdmin = address.toLowerCase() === "0x9aD95Ef94D945B039eD5E8059603119b61271486".toLowerCase();
 
   return (
     <WalletContext.Provider value={{ isConnected, isAdmin, address, balance,usdcBalance,provider,signer, connect, disconnect }}>
