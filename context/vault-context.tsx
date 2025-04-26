@@ -21,8 +21,31 @@ const DIAMOND_ABI = [
   "function getWithdrawableAmount(address user) external view returns (uint256)",
   "function getLockedAmount(address user) external view returns (uint256)",
   "function getUnlockTime(address user) external view returns (uint256[])",
+  "function getAccumulatedFees() external view returns (uint256)",
+  "function getLastUpdateTimestamp() external view returns (uint256)",
+  
+  // Admin functions
+  "function setPerformanceFee(uint256 fee) external",
+  "function setDepositsPaused(bool paused) external",
+  "function collectFees() external",
+  "function toggleEmergencyShutdown() external",
+  "function setLidoWithdrawalAddress(address) external",
+  "function setWstETHAddress(address) external",
+  "function setReceiverContract(address) external",
+  "function setSwapContract(address) external", 
+  "function setFeeCollector(address) external",
+  "function updateWstETHBalance(address user, uint256 amount) external",
+  "function triggerDailyUpdate() external",
+  
   "event Deposit(address indexed caller, address indexed owner, uint256 assets, uint256 shares)",
-  "event Withdraw(address indexed caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)"
+  "event Withdraw(address indexed caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)",
+  "error ZeroAmount()",
+  "error DepositsPaused()",
+  "error MinimumDepositNotMet()",
+  "error EmergencyShutdown()",
+  "error NoSharesMinted()",
+  "error LargeDepositNotTimelocked()",
+  "error DepositAlreadyQueued()",
 ];
 
 const USDC_ABI = [
@@ -95,7 +118,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const { isConnected, address, provider, signer } = useWallet()
   const [userShares, setUserShares] = useState(0)
   const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [diamondContract, setDiamondContract] = useState<ethers.Contract | null>(null)
+  const [diamondContract, setDiamondContract] = useState<ethers.Contract | null>()
   const [usdcContract, setUsdcContract] = useState<ethers.Contract | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -372,8 +395,8 @@ const triggerDailyUpdate = async () => {
   })
   
   // Contract addresses from environment variables
-  const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
-  const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
+  const diamondAddress = "0xAE778866f50A1d9289728c99a5a1821DA8844f72";
+  const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
 
   // Initialize contracts when wallet connects
   useEffect(() => {
@@ -409,19 +432,51 @@ const triggerDailyUpdate = async () => {
   }, [isConnected, address, diamondContract]);
   const initializeContracts = async () => {
     try {
-      if (!signer) return;
+      if (!signer) {
+        console.error("No signer available");
+        return;
+      }
 
       if (!diamondAddress || !usdcAddress) {
-        console.error("Contract addresses not found in environment variables");
+        console.error("Contract addresses not found in environment variables:", {
+          diamondAddress,
+          usdcAddress
+        });
         toast.error("Configuration Error", {
           description: "Contract addresses are not properly configured."
         });
         return;
       }
+
+      console.log("Initializing contracts with addresses:", {
+        diamondAddress,
+        usdcAddress
+      });
       
       const diamond = new ethers.Contract(diamondAddress, DIAMOND_ABI, signer);
       const usdc = new ethers.Contract(usdcAddress, USDC_ABI, signer);
       
+      if (!ethers.isAddress(diamondAddress)) {
+        console.error("Invalid diamond contract address:", diamondAddress);
+        toast.error("Contract Error", {
+          description: "Invalid diamond contract address format."
+        });
+        return;
+      }
+      
+      if (!ethers.isAddress(usdcAddress)) {
+        console.error("Invalid USDC contract address:", usdcAddress);
+        toast.error("Contract Error", {
+          description: "Invalid USDC contract address format."
+        });
+        return;
+      }
+      
+      console.log("Contracts initialized successfully:", {
+        diamondAddress: diamond.address,
+        usdcAddress: usdc.address
+      });
+
       setDiamondContract(diamond);
       setUsdcContract(usdc);
       
@@ -433,12 +488,11 @@ const triggerDailyUpdate = async () => {
   };
 
   // Function to get vault data (TVL, shares, exchange rate)
-  const getVaultData = async (contract: ethers.Contract) => {
+  const getVaultData = useCallback(async (contract: ethers.Contract) => {
     const totalAssets = await contract.totalAssets();
     const totalShares = await contract.totalSupply();
     
     // Calculate exchange rate (assets per share)
-    // If no shares exist yet, use 1.0 as default exchange rate
     let exchangeRate = 1.0;
     if (ethers.getBigInt(totalShares) > BigInt(0)) {
       exchangeRate = Number(ethers.formatUnits(totalAssets, 6)) / 
@@ -450,13 +504,13 @@ const triggerDailyUpdate = async () => {
       totalShares: Number(ethers.formatUnits(totalShares, 18)),
       exchangeRate: exchangeRate
     };
-  };
+  }, []);
 
   // Function to get user's shares
-  const getUserShares = async (contract: ethers.Contract, userAddress: string) => {
+  const getUserShares = useCallback(async (contract: ethers.Contract, userAddress: string) => {
     const shares = await contract.balanceOf(userAddress);
-    return Number(ethers.formatUnits(shares, 18)); // Assuming 18 decimals for shares
-  };
+    return Number(ethers.formatUnits(shares, 18));
+  }, []);
 
   // Refresh vault data function (exposed to UI)
   const refreshVaultData = useCallback(async (includeTransactions = false) => {
@@ -476,29 +530,31 @@ const triggerDailyUpdate = async () => {
       const vaultInfo = await getVaultData(diamondContract);
       
       let accumulatedFees = 0;
-    try {
-      const feesWei = await diamondContract.getAccumulatedFees();
-      accumulatedFees = Number(ethers.formatUnits(feesWei, 6)); // USDC decimals
-    } catch (e) {
-      console.log("getAccumulatedFees not available:", e);
-    }
-    
-    // Get last daily update timestamp (catch errors if function doesn't exist)
-    let lastDailyUpdate = 0;
-    try {
-      const timestamp = await diamondContract.getLastUpdateTimestamp();
-      lastDailyUpdate = Number(timestamp);
-    } catch (e) {
-      console.log("getLastUpdateTimestamp not available:", e);
-    }
+      let lastDailyUpdate = 0;
+      
+      try {
+        // Some contracts might expose state variables directly
+        const accumulatedFeesCall = await diamondContract.accumulatedFees();
+        accumulatedFees = Number(ethers.formatUnits(accumulatedFeesCall, 6)); 
+      } catch (e) {
+        console.log("accumulatedFees not accessible:", e);
+      }
+      
+      try {
+        // Try with lastDailyUpdate as the variable name
+        const lastUpdateCall = await diamondContract.lastDailyUpdate();
+        lastDailyUpdate = Number(lastUpdateCall);
+      } catch (e) {
+        console.log("lastDailyUpdate not accessible:", e);
+      }
 
       setVaultData(prev => ({
         ...prev,
         tvl: vaultInfo.tvl,
         totalShares: vaultInfo.totalShares,
         exchangeRate: vaultInfo.exchangeRate,
-        accumulatedFees: accumulatedFees || prev.accumulatedFees,
-        lastDailyUpdate: lastDailyUpdate || prev.lastDailyUpdate,
+        accumulatedFees: accumulatedFees || 0,
+        lastDailyUpdate: lastDailyUpdate || 0,
         apy: prev.apy
       }));
       
@@ -519,7 +575,7 @@ const triggerDailyUpdate = async () => {
       setIsRefreshing(false)
       setIsLoading(false)
     }
-  }, [diamondContract, address, getVaultData, getUserShares, loadTransactionHistory]);
+  }, [diamondContract, address, isRefreshing, getVaultData, getUserShares, loadTransactionHistory]);
 
   // Core function for approval and deposit
   const approveAndDeposit = async (
@@ -530,17 +586,71 @@ const triggerDailyUpdate = async () => {
   ) => {
     // Convert amount to wei with 6 decimals (USDC)
     const amountWei = ethers.parseUnits(amount.toString(), 6);
-    
+    let adjustedGasLimit;
+
+    if (!diamondContract || !diamondContract.address) {
+      console.error("Diamond contract is not properly initialized:", diamondContract);
+      throw new Error("Diamond contract is not properly initialized");
+    }
+  
+    if (!usdcContract || !usdcContract.address) {
+      console.error("USDC contract is not properly initialized:", usdcContract);
+      throw new Error("USDC contract is not properly initialized");
+    }
+  
+    // Debug logs to help diagnose the issue
+    console.log("Contract validation:", { 
+      diamondContract: !!diamondContract,
+      diamondAddress: diamondContract.address,
+      usdcContract: !!usdcContract,
+      usdcAddress: usdcContract.address
+    });
+
+try {
+  const gasEstimate = await diamondContract.deposit.estimateGas(amountWei, userAddress);
+  adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.2);
+  console.log("Gas estimate succeeded:", adjustedGasLimit);
+} catch (error) {
+  console.log("Gas estimation failed, using fixed limit:", error);
+  // Use a fixed gas limit that's high enough for the deposit function
+  adjustedGasLimit = 2000000; // 2 million gas should be enough
+}
     // Check USDC balance
     const balance = await usdcContract.balanceOf(userAddress);
     if (ethers.getBigInt(balance) < ethers.getBigInt(amountWei)) {
       throw new Error("Insufficient USDC balance");
     }
-    
+
+    console.log("Depositing with parameters:", {
+      amount: amountWei.toString(),
+      receiver: userAddress,
+      contract: diamondContract.address
+    });
+
+    try{
     // Check max deposit limit
     const maxDepositAmount = await diamondContract.maxDeposit(userAddress);
     if (ethers.getBigInt(maxDepositAmount) < ethers.getBigInt(amountWei)) {
       throw new Error(`Amount exceeds max deposit limit`);
+    }
+
+    try {
+      const minDepositAmount = await diamondContract.MIN_DEPOSIT_AMOUNT();
+      console.log("Minimum deposit amount:", ethers.formatUnits(minDepositAmount, 6));
+      if (ethers.getBigInt(amountWei) < ethers.getBigInt(minDepositAmount)) {
+        throw new Error(`Amount below minimum deposit of ${ethers.formatUnits(minDepositAmount, 6)} USDC`);
+      }
+    } catch (e) {
+      console.log("MIN_DEPOSIT_AMOUNT not available in contract interface");
+    }
+
+    try {
+      const depositsPaused = await diamondContract.depositsPaused();
+      if (depositsPaused) {
+        throw new Error("Deposits are currently paused");
+      }
+    } catch (e) {
+      console.log("depositsPaused check not available");
     }
     
     // Check if deposit is large (>10% of vault)
@@ -550,6 +660,7 @@ const triggerDailyUpdate = async () => {
       ethers.getBigInt(amountWei) > ethers.getBigInt(totalAssets) / BigInt(10);
     
     if (isLargeDeposit) {
+      console.log("Large deposit detected - checking timelock");
       try {
         // Try to complete deposit if timelock has passed
         const queueTx = await diamondContract.queueLargeDeposit();
@@ -560,6 +671,7 @@ const triggerDailyUpdate = async () => {
         if (!error.message?.includes("DepositAlreadyQueued")) {
           throw error;
         }
+        console.log("Deposit already queued, continuing with transaction");
         // Otherwise continue with deposit (timelock may have passed)
       }
     }
@@ -567,23 +679,36 @@ const triggerDailyUpdate = async () => {
     // Check and approve USDC allowance if needed
     const allowance = await usdcContract.allowance(userAddress, diamondContract.address);
     if (ethers.getBigInt(allowance) < ethers.getBigInt(amountWei)) {
+      console.log("Approving USDC...");
       const approveTx = await usdcContract.approve(diamondContract.address, amountWei);
       await approveTx.wait();
+      console.log("USDC approved successfully");
+    } else {
+      console.log("USDC already approved");
     }
     
     // Get fee data for gas estimation
-    const feeData = await provider!.getFeeData();
-    
+    if (!provider) {
+      throw new Error("Provider not available");
+    }
+    const feeData = await provider.getFeeData();
+    console.log("Gas fee data:", {
+      maxFeePerGas: feeData.maxFeePerGas?.toString(),
+      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas?.toString()
+    });
+
     // Execute deposit
     const tx = await diamondContract.deposit(amountWei, userAddress, {
-      gasLimit: BigInt(1000000),
+      gasLimit: BigInt(adjustedGasLimit),
       maxFeePerGas: feeData.maxFeePerGas,
       maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
     });
-    
+
+    console.log("Deposit transaction sent:", tx.hash);
     // Wait for transaction confirmation
     const receipt = await tx.wait(1);
-    
+    console.log("Transaction confirmed:", receipt);
+
     // Calculate shares received
     const expectedShares = await diamondContract.previewDeposit(amountWei);
     const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
@@ -593,13 +718,61 @@ const triggerDailyUpdate = async () => {
       txHash: receipt.hash, 
       shares: sharesReceived 
     };
-  };
+  } catch(error : any){
+    console.error("Deposit error details:", error);
+    
+    // Check for custom errors from the contract
+    if (error.data) {
+      // Try to decode the error
+      try {
+        const errorInterface = new ethers.Interface([
+          "error ZeroAmount()",
+          "error DepositsPaused()",
+          "error MinimumDepositNotMet()",
+          "error EmergencyShutdown()",
+          "error NoSharesMinted()",
+          "error LargeDepositNotTimelocked()",
+          "error DepositAlreadyQueued()"
+        ]);
+        
+        const decodedError = errorInterface.parseError(error.data);
+        if (decodedError) {
+          console.log("Decoded contract error:", decodedError.name);
+          throw new Error(`Contract error: ${decodedError.name}`);
+        }
+      } catch (e) {
+        console.log("Could not decode contract error");
+      }
+    }
+    
+    throw error;
+  }
+  }
 
   // Real deposit function that interacts with the blockchain
   const deposit = async (amount: number) => {
     if (!isConnected || !address) throw new Error("Wallet not connected");
-    if (!diamondContract || !usdcContract) throw new Error("Contracts not initialized");
     
+    if (!diamondContract) {
+      console.error("Diamond contract is null");
+      throw new Error("Diamond contract not initialized");
+    }    
+
+    if (!diamondContract.address) {
+      console.error("Diamond contract has no address");
+      throw new Error("Diamond contract has no address");
+    }
+    
+    if (!usdcContract) {
+      console.error("USDC contract is null");
+      throw new Error("USDC contract not initialized");
+    }
+    
+    if (!usdcContract.address) {
+      console.error("USDC contract has no address");
+      throw new Error("USDC contract has no address");
+    }
+
     try {
       // Show pending toast
       const pendingToast = toast.loading("Processing deposit...");
@@ -661,14 +834,16 @@ const triggerDailyUpdate = async () => {
   const withdraw = async (amount: number) => {
     if (!isConnected || !address) throw new Error("Wallet not connected");
     if (!diamondContract) throw new Error("Contracts not initialized");
-    
+
     try {
       // Show pending toast
       const pendingToast = toast.loading("Processing withdrawal...");
       
       // Convert amount to wei (USDC has 6 decimals)
       const amountWei = ethers.parseUnits(amount.toString(), 6);
-      
+      const gasEstimate = await diamondContract.withdraw.estimateGas(amountWei, address, address);
+      const adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.2); // Add 20% buffer
+
       // Check withdrawal limit
       const withdrawable = await diamondContract.getWithdrawableAmount(address);
       if (ethers.getBigInt(withdrawable) < ethers.getBigInt(amountWei)) {
@@ -693,7 +868,7 @@ const triggerDailyUpdate = async () => {
       
       // Execute withdrawal
       const tx = await diamondContract.withdraw(amountWei, address, address, {
-        gasLimit: BigInt(1000000),
+        gasLimit: BigInt(adjustedGasLimit),
         maxFeePerGas: feeData.maxFeePerGas,
         maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
       });
@@ -754,32 +929,54 @@ const triggerDailyUpdate = async () => {
 
   // Admin function to set fee
   const setFee = async (fee: number) => {
-    // In a real app, this would call the smart contract
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // Simulate blockchain delay
-
-    setVaultData((prev) => ({
-      ...prev,
-      currentFee: fee,
-    }));
-
-    toast.success("Fee updated", {
-      description: `Performance fee has been set to ${fee}%`,
-    });
+    if (!diamondContract) return;
+    
+    try {
+      // Convert fee percentage to contract format if needed
+      const feeValue = ethers.parseUnits(fee.toString(), 2); // Assuming 2 decimals
+      
+      const tx = await diamondContract.setPerformanceFee(feeValue);
+      await tx.wait();
+      
+      setVaultData((prev) => ({
+        ...prev,
+        currentFee: fee,
+      }));
+  
+      toast.success("Fee updated", {
+        description: `Performance fee has been set to ${fee}%`,
+      });
+    } catch (error) {
+      console.error("Error updating fee:", error);
+      toast.error("Failed to update performance fee");
+      throw error;
+    }
   };
 
   // Admin function to toggle pause
   const togglePause = async (paused: boolean) => {
-    // In a real app, this would call the smart contract
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // Simulate blockchain delay
-
-    if (paused) {
-      toast.error("Vault paused", {
-        description: "All deposits and withdrawals are now paused",
-      });
-    } else {
-      toast.success("Vault resumed", {
-        description: "The vault is now active again",
-      });
+    if (!diamondContract) return;
+    
+    try {
+      // Call the appropriate contract function
+      const tx = await diamondContract.setDepositsPaused(paused);
+      await tx.wait();
+  
+      if (paused) {
+        toast.error("Vault paused", {
+          description: "All deposits and withdrawals are now paused",
+        });
+      } else {
+        toast.success("Vault resumed", {
+          description: "The vault is now active again",
+        });
+      }
+      
+      await refreshVaultData();
+    } catch (error) {
+      console.error("Error toggling pause state:", error);
+      toast.error("Failed to update vault pause state");
+      throw error;
     }
   };
 

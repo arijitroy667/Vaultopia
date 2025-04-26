@@ -29,8 +29,8 @@ async function connectToNetwork() {
 
 // Connect to contracts
 async function connectToContracts(wallet) {
-  const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
-  const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
+  const diamondAddress = 0xAE778866f50A1d9289728c99a5a1821DA8844f72;
+  const usdcAddress = 0x06901fD3D877db8fC8788242F37c1A15f05CEfF8;
   
   const diamondContract = new ethers.Contract(diamondAddress, DIAMOND_ABI, wallet);
   const usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, wallet);

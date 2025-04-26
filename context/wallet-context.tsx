@@ -32,7 +32,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
 
-  const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
+  const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
   const USDC_ABI = [
     "function balanceOf(address account) external view returns (uint256)",
     "function decimals() external view returns (uint8)"

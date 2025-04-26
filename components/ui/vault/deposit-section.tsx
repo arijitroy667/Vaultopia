@@ -9,38 +9,18 @@ import { useVault } from "@/context/vault-context"
 import { useWallet } from "@/context/wallet-context"
 import { ArrowRight, Info, AlertCircle } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { ethers } from "ethers"
-
-// USDC and Diamond ABIs
-const DIAMOND_ABI = [
-  "function deposit(uint256 assets, address receiver) external returns (uint256)",
-  "function previewDeposit(uint256 assets) public view returns (uint256)",
-  "function queueLargeDeposit() external",
-  "function maxDeposit(address receiver) public view returns (uint256)",
-  "function totalAssets() external view returns (uint256)"
-];
-
-const USDC_ABI = [
-  "function approve(address spender, uint256 amount) external returns (bool)",
-  "function balanceOf(address account) external view returns (uint256)",
-  "function allowance(address owner, address spender) external view returns (uint256)"
-];
 
 export function DepositSection() {
   const [amount, setAmount] = useState("")
-  const [isApproving, setIsApproving] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const { vaultData, refreshVaultData } = useVault()
-  const { usdcBalance, isConnected, provider, address } = useWallet()
-
-  // Addresses from environment variables
-  const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
-  const usdcAddress = process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
+  const [isApproving, setIsApproving] = useState(false)
+  const { vaultData, refreshVaultData, deposit } = useVault()
+  const { usdcBalance, isConnected } = useWallet()
 
   const handleDeposit = async () => {
     if (!amount || Number.parseFloat(amount) <= 0) return
     
-    if (!isConnected || !provider) {
+    if (!isConnected) {
       toast.error("Wallet not connected", {
         description: "Please connect your wallet first"
       });
@@ -49,130 +29,38 @@ export function DepositSection() {
 
     setIsLoading(true);
     const amountNum = Number.parseFloat(amount);
-    const amountWei = ethers.parseUnits(amountNum.toString(), 6); // USDC has 6 decimals
     
     try {
-      // Initialize contracts with ethers v6
-      const signer = await provider.getSigner();
-
-      if (!diamondAddress || !usdcAddress) {
-        console.error("Contract addresses not found in environment variables");
-        toast.error("Configuration Error", {
-          description: "Contract addresses are not properly configured."
-        });
-        return;
-      }
-
-      const usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, signer);
-      const diamondContract = new ethers.Contract(diamondAddress, DIAMOND_ABI, signer);
-
-      // Step 1: Check if user has enough balance
-      const actualBalance = await usdcContract.balanceOf(address);
-      if (ethers.getBigInt(actualBalance) < ethers.getBigInt(amountWei)) {
-        toast.error("Insufficient balance", {
-          description: "You don't have enough USDC for this deposit"
-        });
-        setIsLoading(false);
-        return;
-      }
-
-      // Step 2: Check vault deposit limit
-      const maxDepositAmount = await diamondContract.maxDeposit(address);
-      if (ethers.getBigInt(maxDepositAmount) < ethers.getBigInt(amountWei)) {
-        toast.error("Deposit limit exceeded", {
-          description: `Maximum deposit allowed: ${ethers.formatUnits(maxDepositAmount, 6)} USDC`
-        });
-        setIsLoading(false);
-        return;
-      }
-
-      // Step 3: Check if deposit is large (>10% of vault)
-      const totalAssets = await diamondContract.totalAssets();
-      const isFirstDeposit = ethers.getBigInt(totalAssets) === BigInt(0);
-      const isLargeDeposit = !isFirstDeposit && 
-        ethers.getBigInt(amountWei) > ethers.getBigInt(totalAssets) / BigInt(10);
+      toast.info("Processing deposit...");
       
-      if (isLargeDeposit) {
-        toast.info("Large deposit detected", {
-          description: "This deposit is >10% of the vault. A timelock will be required."
-        });
-        
-        try {
-          // Queue the large deposit (will revert if already queued)
-          const queueTx = await diamondContract.queueLargeDeposit();
-          toast.info("Deposit queued", {
-            description: "Please wait 1 hour before completing your deposit"
-          });
-          await queueTx.wait();
-          setIsLoading(false);
-          return;
-        } catch (error: any) {
-          if (error.message && error.message.includes("DepositAlreadyQueued")) {
-            toast.info("Deposit already queued", {
-              description: "Proceeding with deposit if timelock has passed"
-            });
-            // Continue with deposit as it may be already unlocked
-          } else {
-            throw error;
-          }
-        }
-      }
+      // Use the vault context deposit function
+      await deposit(amountNum);
       
-      // Step 4: Approve USDC spending if needed
-      setIsApproving(true);
-      const currentAllowance = await usdcContract.allowance(address, diamondAddress);
-      if (ethers.getBigInt(currentAllowance) < ethers.getBigInt(amountWei)) {
-        toast.info("Approving USDC...");
-        const approveTx = await usdcContract.approve(diamondAddress, amountWei);
-        await approveTx.wait();
-        toast.success("USDC approved");
-      }
-      setIsApproving(false);
-      
-      // Step 5: Execute the deposit
-      const expectedShares = await diamondContract.previewDeposit(amountWei);
-      
-      const feeData = await provider.getFeeData();
-      
-      toast.info("Depositing USDC...");
-      const tx = await diamondContract.deposit(amountWei, address, {
-        gasLimit: BigInt(1000000), // Higher limit for complex operation
-        maxFeePerGas: feeData.maxFeePerGas, 
-        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
-      });
-      
-      toast.promise(tx.wait(1), {
-        loading: 'Confirming transaction...',
-        success: 'Deposit successful!',
-        error: 'Transaction failed'
-      });
-      
-      await tx.wait(1);
+      // Clear input after successful deposit
       setAmount("");
-      
-      // Refresh UI data
-      refreshVaultData();
       
     } catch (error: any) {
       console.error("Deposit failed:", error);
+      
+      // More detailed error handling
       let errorMessage = "Unknown error occurred";
       
-      // Extract relevant error messages
       if (error.message) {
-        if (error.message.includes("LargeDepositNotTimelocked")) {
-          errorMessage = "Timelock period for large deposit has not passed yet";
+        if (error.message.includes("MinimumDepositNotMet")) {
+          errorMessage = "Amount below minimum deposit requirement";
         } else if (error.message.includes("user rejected")) {
           errorMessage = "Transaction rejected by user";
         } else if (error.message.includes("insufficient funds")) {
           errorMessage = "Insufficient ETH for gas fees";
+        } else if (error.message.includes("LargeDepositNotTimelocked")) {
+          errorMessage = "Large deposit requires timelock period";
         } else {
-          errorMessage = error.message.split('(')[0].trim();
+          errorMessage = error.message;
         }
       }
       
       toast.error("Deposit failed", { description: errorMessage });
     } finally {
-      setIsApproving(false);
       setIsLoading(false);
     }
   }
