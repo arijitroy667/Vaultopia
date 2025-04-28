@@ -16,13 +16,21 @@ export function DepositSection() {
   const [isApproving, setIsApproving] = useState(false)
   const { vaultData, refreshVaultData, deposit } = useVault()
   const { usdcBalance, isConnected } = useWallet()
-
+  const MIN_DEPOSIT = 1;
+  
   const handleDeposit = async () => {
-    if (!amount || Number.parseFloat(amount) <= 0) return
+    if (!amount || Number.parseFloat(amount) <= 0) return;
     
     if (!isConnected) {
       toast.error("Wallet not connected", {
         description: "Please connect your wallet first"
+      });
+      return;
+    }
+
+    if (Number.parseFloat(amount) < MIN_DEPOSIT) {
+      toast.error("Minimum deposit required", {
+        description: `Please deposit at least ${MIN_DEPOSIT} USDC`
       });
       return;
     }
@@ -32,10 +40,10 @@ export function DepositSection() {
     
     try {
       toast.info("Processing deposit...");
-      
+      setIsApproving(true);
       // Use the vault context deposit function
       await deposit(amountNum);
-      
+      await refreshVaultData();
       // Clear input after successful deposit
       setAmount("");
       
@@ -54,6 +62,14 @@ export function DepositSection() {
           errorMessage = "Insufficient ETH for gas fees";
         } else if (error.message.includes("LargeDepositNotTimelocked")) {
           errorMessage = "Large deposit requires timelock period";
+        } else if (error.message.includes("DepositsPaused")) {
+          errorMessage = "Deposits are currently paused";
+        } else if (error.message.includes("EmergencyShutdown")) {
+          errorMessage = "The vault is in emergency shutdown mode";
+        } else if (error.message.includes("ZeroAmount")) {
+          errorMessage = "Cannot deposit zero amount";
+        } else if (error.message.includes("Swap contract not set")) {
+          errorMessage = "Vault configuration issue - please contact support";
         } else {
           errorMessage = error.message;
         }
@@ -62,6 +78,7 @@ export function DepositSection() {
       toast.error("Deposit failed", { description: errorMessage });
     } finally {
       setIsLoading(false);
+      setIsApproving(false);
     }
   }
 

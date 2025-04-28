@@ -6,7 +6,7 @@ declare global {
 
 "use client";
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useMemo, useEffect, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ethers } from "ethers";
 
@@ -88,6 +88,44 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Add these to the WalletProvider component
+useEffect(() => {
+  // Check if already connected from previous session
+  const checkConnection = async () => {
+    if (window.ethereum && window.ethereum.selectedAddress) {
+      connect();
+    }
+  };
+  
+  checkConnection();
+  
+  // Add event listeners for MetaMask events
+  if (window.ethereum) {
+    window.ethereum.on('accountsChanged', (accounts) => {
+      if (accounts.length === 0) {
+        // User disconnected their wallet
+        disconnect();
+      } else {
+        // User switched accounts, reconnect
+        connect();
+      }
+    });
+    
+    window.ethereum.on('chainChanged', () => {
+      // Network changed, refresh the page
+      window.location.reload();
+    });
+  }
+  
+  // Cleanup event listeners
+  return () => {
+    if (window.ethereum) {
+      window.ethereum.removeListener('accountsChanged', () => {});
+      window.ethereum.removeListener('chainChanged', () => {});
+    }
+  };
+}, []);
+
   // Disconnect wallet
   const disconnect = () => {
     setIsConnected(false);
@@ -103,14 +141,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   };
 
   // Check if the connected address is an admin (replace with actual admin address)
-  const isAdmin = address.toLowerCase() === "0x9aD95Ef94D945B039eD5E8059603119b61271486".toLowerCase();
+  const adminAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS || "0x9aD95Ef94D945B039eD5E8059603119b61271486";
+  const isAdmin = address.toLowerCase() === adminAddress.toLowerCase();
+
+const contextValue = useMemo(() => ({
+  isConnected, 
+  isAdmin, 
+  address, 
+  balance,
+  usdcBalance,
+  provider,
+  signer, 
+  connect, 
+  disconnect
+}), [isConnected, isAdmin, address, balance, usdcBalance, provider, signer]);
 
   return (
-    <WalletContext.Provider value={{ isConnected, isAdmin, address, balance,usdcBalance,provider,signer, connect, disconnect }}>
+    <WalletContext.Provider value={contextValue}>
       {children}
     </WalletContext.Provider>
   );
 }
+
+
 
 export function useWallet() {
   const context = useContext(WalletContext);

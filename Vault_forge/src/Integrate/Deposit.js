@@ -21,7 +21,7 @@ const USDC_ABI = [
 
 // Connect to the network
 async function connectToNetwork() {
-  const provider = new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_ALCHEMY_URL);
+  const provider = new ethers.providers.JsonRpcProvider("https://eth-holesky.g.alchemy.com/v2/NZ1c4Vu21IOmBWCLeIe2oVMFLgLbfMLs");
   const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
   console.log(`Connected with address: ${wallet.address}`);
   return { provider, wallet };

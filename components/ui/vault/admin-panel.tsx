@@ -446,12 +446,12 @@ export function AdminPanel() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <div className="bg-muted p-4 rounded-md">
+                  {/* <div className="bg-muted p-4 rounded-md">
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-medium">Accumulated Fees:</span>
                       <span className="font-bold">${vaultData?.accumulatedFees || "0.00"}</span>
                     </div>
-                  </div>
+                  </div> */}
                   
                   <div className="space-y-2">
                     <Label htmlFor="fee-collector">Fee Collector Address</Label>

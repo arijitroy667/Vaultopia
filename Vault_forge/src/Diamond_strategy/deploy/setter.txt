@@ -1,0 +1,9 @@
+network with address 0x9aD95Ef94D945B039eD5E8059603119b61271486
+Functions already exist in Diamond, using them directly...
+Setting swap contract to: 0x9Be14C2846611DAa57594aFc43B0f78ed82b92C2
+✅ Swap contract set successfully!
+Setting receiver contract to: 0x5b04981Ba22280359EC4Ca3d8B5EdAC55984De47
+✅ Receiver contract set successfully!
+✨ Setup complete! Your vault's deposit function should now work correctly.
+PS C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\src\Diamond_strategy\deploy>
+
