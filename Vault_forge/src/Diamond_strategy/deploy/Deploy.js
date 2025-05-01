@@ -91,7 +91,7 @@ async function main() {
   const provider = new ethers.JsonRpcProvider('https://eth-holesky.g.alchemy.com/v2/NZ1c4Vu21IOmBWCLeIe2oVMFLgLbfMLs');
   
   // Load private key from environment variable - never hardcode private keys
-  const privateKey = process.env.NEXT_PUBLIC_PRIVATE_KEY || "144b73c3645e2cc6522c3e090e3892afc693133cae399c271af91fde7332d6e4";
+  const privateKey = process.env.NEXT_PUBLIC_PRIVATE_KEY || "";
   if (!privateKey) {
     throw new Error("PRIVATE_KEY environment variable is not set");
   }
@@ -102,8 +102,8 @@ async function main() {
   // Addresses for initialization - replace with actual addresses
   const lidoWithdrawalAddress = "0xF0179dEC45a37423EAD4FaD5fCb136197872EAd9";
   const wstETHAddress = "0x8d09a4502Cc8Cf1547aD300E066060D043f6982D";
-  const receiverAddress = "0x5b04981Ba22280359EC4Ca3d8B5EdAC55984De47";
-  const swapContractAddress = "0xd2151d43C7D3CC15dAd1B5C0deaB50A4b30eb154";
+  const receiverAddress = "0x5B04671C547f7B3e4D5E5F6Cea1D908872339CcE";
+  const swapContractAddress = "0xdb229c8dDE6A500e0C9A0E031Be17b5A0058e9a1";
   const assetTokenAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8"; // USDC
   
   // Deploy DiamondCutFacet

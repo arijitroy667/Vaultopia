@@ -435,7 +435,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     currentFee: 2.0,
   });
 
-  // Contract addresses from environment variables
   const diamondAddress = "0x879Fb6Dd6c64157405845b681184B616c49fB00E";
   const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
 
@@ -580,28 +579,70 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       setIsLoading(true);
 
       try {
-        // Get vault data
-        const vaultInfo = await getVaultData(diamondContract);
+        // Use Promise.allSettled to run all requests in parallel
+        // This ensures one failure doesn't stop other data from loading
+        const [
+          vaultInfoResult,
+          accumulatedFeesResult,
+          lastUpdateResult,
+          sharesResult,
+        ] = await Promise.allSettled([
+          getVaultData(diamondContract),
+          diamondContract.accumulatedFees(),
+          diamondContract.lastDailyUpdate(),
+          getUserShares(diamondContract, address),
+        ]);
 
+        // Process vault info (TVL, shares, exchange rate)
+        let vaultInfo = {
+          tvl: 0,
+          totalShares: 0,
+          exchangeRate: 1.0,
+        };
+        if (vaultInfoResult.status === "fulfilled") {
+          vaultInfo = vaultInfoResult.value;
+        } else {
+          console.error("Failed to get vault data:", vaultInfoResult.reason);
+        }
+
+        // Process accumulated fees
         let accumulatedFees = 0;
+        if (accumulatedFeesResult.status === "fulfilled") {
+          accumulatedFees = Number(
+            ethers.formatUnits(accumulatedFeesResult.value, 6)
+          );
+        } else {
+          console.warn(
+            "Failed to get accumulatedFees:",
+            accumulatedFeesResult.reason
+          );
+        }
+
+        // Process last update time
         let lastDailyUpdate = 0;
-
-        try {
-          // Explicitly trying to access state variables directly
-          const accumulatedFeesCall = await diamondContract.accumulatedFees();
-          accumulatedFees = Number(ethers.formatUnits(accumulatedFeesCall, 6));
-        } catch (e) {
-          console.log("accumulatedFees state variable not accessible:", e);
+        if (lastUpdateResult.status === "fulfilled") {
+          lastDailyUpdate = Number(lastUpdateResult.value);
+        } else {
+          console.warn(
+            "Failed to get lastDailyUpdate:",
+            lastUpdateResult.reason
+          );
         }
 
-        try {
-          // Try with lastDailyUpdate as the variable name
-          const lastUpdateCall = await diamondContract.lastDailyUpdate();
-          lastDailyUpdate = Number(lastUpdateCall);
-        } catch (e) {
-          console.log("lastDailyUpdate not accessible:", e);
+        // Process user shares
+        if (sharesResult.status === "fulfilled") {
+          setUserShares(sharesResult.value);
+        } else {
+          console.warn("Failed to get user shares:", sharesResult.reason);
         }
 
+        // Format the timestamp for easier display
+        const formattedLastUpdate =
+          lastDailyUpdate > 0
+            ? new Date(lastDailyUpdate * 1000).toLocaleString()
+            : "Never";
+
+        // Update vault data state
         setVaultData((prev) => ({
           ...prev,
           tvl: vaultInfo.tvl,
@@ -609,15 +650,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           exchangeRate: vaultInfo.exchangeRate,
           accumulatedFees: accumulatedFees || 0,
           lastDailyUpdate: lastDailyUpdate || 0,
+          formattedLastUpdate: formattedLastUpdate,
           apy: prev.apy,
+          isStale: Date.now() - lastDailyUpdate * 1000 > 24 * 60 * 60 * 1000, // Flag as stale if > 24 hours
         }));
 
-        // Get user's shares
-        const shares = await getUserShares(diamondContract, address);
-        setUserShares(shares);
-
         // Only load transaction history when explicitly requested
-        // This prevents excessive blockchain queries
         if (includeTransactions) {
           await loadTransactionHistory();
         }
@@ -640,8 +678,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     ]
   );
 
-  // Core function for approval and deposit
-  // Core function for approval and deposit with better error handling
+  // Core function for approval and deposit with enhanced diagnostics
   const approveAndDeposit = async (
     diamondContract: ethers.Contract,
     usdcContract: ethers.Contract,
@@ -668,6 +705,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       userAddress,
       diamondContract.target
     );
+
+    console.log("USDC Allowance Check:", {
+      currentAllowance: ethers.formatUnits(allowance, 6),
+      requiredAmount: ethers.formatUnits(amountWei, 6),
+      needsApproval: ethers.getBigInt(allowance) < ethers.getBigInt(amountWei),
+    });
+
     if (ethers.getBigInt(allowance) < ethers.getBigInt(amountWei)) {
       console.log("Approving USDC...");
       const approveTx = await usdcContract.approve(
@@ -686,7 +730,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
     // Try to estimate gas first to get better error messages
     try {
+      console.log("Estimating gas for deposit...");
       await diamondContract.deposit.estimateGas(amountWei, formattedAddress);
+      console.log("Gas estimation successful!");
     } catch (error: any) {
       console.error("Gas estimation failed:", error);
 
@@ -709,11 +755,76 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      // Alternative deposit attempt with hardcoded gas limit as fallback
+      if (amount <= 10) {
+        // Only try fallback for smaller amounts
+        console.log("Attempting fallback deposit with fixed gas limit...");
+        try {
+          const fallbackGasLimit = 500000; // Hard-coded safe value
+          const tx = await diamondContract.deposit(
+            amountWei,
+            formattedAddress,
+            {
+              gasLimit: BigInt(fallbackGasLimit),
+            }
+          );
+
+          console.log("Fallback deposit transaction sent:", tx.hash);
+          const receipt = await tx.wait(1);
+          console.log("Fallback transaction confirmed:", receipt);
+
+          const expectedShares = await diamondContract.previewDeposit(
+            amountWei
+          );
+          const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
+
+          return {
+            success: true,
+            txHash: receipt.hash,
+            shares: sharesReceived,
+          };
+        } catch (fallbackError) {
+          console.error("Fallback deposit failed:", fallbackError);
+        }
+      }
+
       // Check for common issues
       if (error.message) {
+        console.log("Error message:", error.message);
+
+        // Try to provide more specific error messages
         if (error.message.includes("execution reverted")) {
+          // Check specific conditions
+          try {
+            const minDeposit = await diamondContract.minDeposit();
+            if (ethers.getBigInt(amountWei) < ethers.getBigInt(minDeposit)) {
+              throw new Error(
+                `Deposit amount too small. Minimum: ${ethers.formatUnits(
+                  minDeposit,
+                  6
+                )} USDC`
+              );
+            }
+
+            const maxDeposit = await diamondContract.maxDeposit(
+              formattedAddress
+            );
+            if (ethers.getBigInt(amountWei) > ethers.getBigInt(maxDeposit)) {
+              throw new Error(
+                `Deposit amount too large. Maximum: ${ethers.formatUnits(
+                  maxDeposit,
+                  6
+                )} USDC`
+              );
+            }
+          } catch (checkError: any) {
+            if (checkError.message.startsWith("Deposit amount")) {
+              throw checkError;
+            }
+          }
+
           throw new Error(
-            "Contract rejected the transaction. You may need to queue a large deposit first."
+            "Contract rejected the transaction. You may need to check contract configuration or queue a large deposit first."
           );
         }
       }
@@ -727,27 +838,47 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       amountWei,
       formattedAddress
     );
-    const adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.2); // Add 20% buffer
 
-    const tx = await diamondContract.deposit(amountWei, formattedAddress, {
-      gasLimit: BigInt(adjustedGasLimit),
+    // Use a higher buffer for complex operations
+    const adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.5); // Increased to 50% buffer
+
+    console.log("Deposit gas:", {
+      estimated: gasEstimate.toString(),
+      withBuffer: adjustedGasLimit.toString(),
     });
 
-    console.log("Deposit transaction sent:", tx.hash);
+    try {
+      const tx = await diamondContract.deposit(amountWei, formattedAddress, {
+        gasLimit: BigInt(adjustedGasLimit),
+      });
 
-    // Wait for transaction confirmation
-    const receipt = await tx.wait(1);
-    console.log("Transaction confirmed:", receipt);
+      console.log("Deposit transaction sent:", tx.hash);
 
-    // Calculate shares received
-    const expectedShares = await diamondContract.previewDeposit(amountWei);
-    const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
+      // Wait for transaction confirmation
+      const receipt = await tx.wait(1);
+      console.log("Transaction confirmed:", receipt);
 
-    return {
-      success: true,
-      txHash: receipt.hash,
-      shares: sharesReceived,
-    };
+      // Calculate shares received
+      const expectedShares = await diamondContract.previewDeposit(amountWei);
+      const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
+
+      return {
+        success: true,
+        txHash: receipt.hash,
+        shares: sharesReceived,
+      };
+    } catch (txError: any) {
+      console.error("Transaction execution failed:", txError);
+
+      // Add specific checks for transaction failures
+      if (txError.message?.includes("insufficient funds")) {
+        throw new Error(
+          "Insufficient ETH for gas fees. Please add more ETH to your wallet."
+        );
+      }
+
+      throw txError;
+    }
   };
 
   const queueLargeDeposit = async () => {
@@ -768,64 +899,112 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // Real deposit function that interacts with the blockchain
   const deposit = async (amount: number) => {
     if (!isConnected || !address) throw new Error("Wallet not connected");
-
-    if (!diamondContract) {
-      console.error("Diamond contract is null");
+    if (!diamondContract?.target)
       throw new Error("Diamond contract not initialized");
-    }
+    if (!usdcContract?.target) throw new Error("USDC contract not initialized");
 
-    if (!diamondContract.target) {
-      console.error("Diamond contract has no address");
-      throw new Error("Diamond contract has no address");
-    }
-
-    if (!usdcContract) {
-      console.error("USDC contract is null");
-      throw new Error("USDC contract not initialized");
-    }
-
-    if (!usdcContract.target) {
-      console.error("USDC contract has no address");
-      throw new Error("USDC contract has no address");
-    }
+    // Generate a unique transaction ID to track this deposit
+    const transactionId = `deposit-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
+    let pendingToast: string | number | null = null;
 
     try {
-      // Show pending toast
-      const pendingToast = toast.loading("Processing deposit...");
+      // Show pending toast with more information
+      pendingToast = toast.loading(
+        `Preparing deposit of $${amount.toLocaleString()}...`,
+        {
+          duration: 60000, // Long duration since we'll manually dismiss
+        }
+      );
 
-      // Add pending transaction
+      // Create & add pending transaction record
       const pendingTx: Transaction = {
         type: "deposit",
         amount,
-        shares: 0, // Will be updated after transaction
+        shares: 0,
         timestamp: Date.now(),
         status: "pending",
+        id: transactionId,
       };
       setTransactions((prev) => [pendingTx, ...prev]);
 
-      const totalAssets = await diamondContract.totalAssets();
-      const amountWei = ethers.parseUnits(amount.toString(), 6);
+      // Run preliminary contract checks in parallel
+      const [totalAssets, usdcBalance, usdcDecimals] = await Promise.all([
+        diamondContract.totalAssets(),
+        usdcContract.balanceOf(address),
+        usdcContract.decimals().catch(() => 6), // Default to 6 if call fails
+      ]);
+
+      // Format amount using actual token decimals
+      const amountWei = ethers.parseUnits(amount.toString(), usdcDecimals);
+
+      // Check USDC balance before proceeding
+      if (ethers.getBigInt(usdcBalance) < ethers.getBigInt(amountWei)) {
+        throw new Error(
+          `Insufficient USDC balance. You have ${ethers.formatUnits(
+            usdcBalance,
+            usdcDecimals
+          )} USDC.`
+        );
+      }
+
+      // Check if this is a large deposit (>10% of vault)
       const isLargeDeposit =
         totalAssets > 0 &&
         ethers.getBigInt(amountWei) >
           ethers.getBigInt(totalAssets) / BigInt(10);
 
+      // Handle large deposits properly
       if (isLargeDeposit) {
-        // Check if deposit is already queued
+        // Update toast to indicate checking unlock time
+        toast.loading("Checking timelock status...", {
+          id: pendingToast,
+        });
+
         const unlockTime = await diamondContract.largeDepositUnlockTime(
           address
         );
+
         if (unlockTime === 0 || Date.now() / 1000 < Number(unlockTime)) {
+          // Clean up the pending transaction
+          setTransactions((prev) =>
+            prev.filter(
+              (tx) => !(tx.status === "pending" && tx.id === transactionId)
+            )
+          );
+
+          // Update toast to error state
           toast.error("Large deposit requires queueing", {
+            id: pendingToast,
             description:
               "This deposit exceeds 10% of vault assets and needs to be queued first.",
           });
-          // Optionally offer to queue it
+
+          // Prompt user to queue the deposit
+          const shouldQueue = window.confirm(
+            "Would you like to queue this large deposit now? You'll be able to complete it after the timelock period."
+          );
+
+          if (shouldQueue) {
+            return await queueLargeDeposit();
+          }
+
           return;
         }
+
+        // Let user know deposit will proceed
+        toast.loading("Timelock completed. Proceeding with deposit...", {
+          id: pendingToast,
+        });
       }
 
-      // Execute deposit on blockchain
+      // Update toast to show approval/deposit progress
+      toast.loading("Processing deposit transaction...", {
+        id: pendingToast,
+      });
+
+      // Execute deposit with more detailed error handling
       const result = await approveAndDeposit(
         diamondContract,
         usdcContract,
@@ -833,48 +1012,95 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         address
       );
 
-      // Update UI state
+      // Update UI state atomically
       setUserShares((prev) => prev + result.shares);
 
-      // Update transactions
-      const completedTx: Transaction = {
-        ...pendingTx,
-        shares: result.shares,
-        status: "completed",
-      };
+      // Update transaction in a single state update
       setTransactions((prev) => [
-        completedTx,
-        ...prev.filter((tx) => tx !== pendingTx),
+        {
+          ...pendingTx,
+          shares: result.shares,
+          status: "completed",
+          txHash: result.txHash,
+        },
+        ...prev.filter(
+          (tx) => !(tx.status === "pending" && tx.id === transactionId)
+        ),
       ]);
 
-      // Refresh vault data
-      await refreshVaultData();
+      // Refresh vault data in background
+      refreshVaultData().catch((err) =>
+        console.warn("Background refresh failed:", err)
+      );
 
-      // Show success toast
-      toast.dismiss(pendingToast);
+      // Show success toast with transaction link
       toast.success("Deposit successful", {
-        description: `You have deposited $${amount} and received ${result.shares.toFixed(
-          2
-        )} shares`,
+        id: pendingToast,
+        description: (
+          <div>
+            <p>
+              You have deposited ${amount.toLocaleString()} and received{" "}
+              {result.shares.toFixed(4)} shares
+            </p>
+            {result.txHash && (
+              <a
+                href={`https://holesky.etherscan.io/tx/${result.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-500 hover:underline"
+              >
+                View transaction on Etherscan →
+              </a>
+            )}
+          </div>
+        ),
       });
+
+      return result;
     } catch (error: any) {
       console.error("Deposit failed:", error);
 
-      // Update failed transaction
+      // Clean up the pending transaction
       setTransactions((prev) =>
         prev.map((tx) =>
-          tx.status === "pending" &&
-          tx.type === "deposit" &&
-          tx.amount === amount
-            ? { ...tx, status: "failed" }
+          tx.status === "pending" && tx.id === transactionId
+            ? { ...tx, status: "failed", error: error.message }
             : tx
         )
       );
 
-      // Show error toast
+      // Provide more helpful error messages based on error types
+      let errorMessage =
+        error.message || "Transaction failed. Please try again.";
+      let actionSuggestion = "";
+
+      // Handle common error cases with specific suggestions
+      if (errorMessage.includes("user rejected")) {
+        errorMessage = "Transaction was rejected.";
+        actionSuggestion = "You can try again when you're ready.";
+      } else if (errorMessage.includes("insufficient funds for gas")) {
+        errorMessage = "Not enough ETH for transaction fees.";
+        actionSuggestion = "Please add more ETH to your wallet.";
+      } else if (errorMessage.includes("MinimumDepositNotMet")) {
+        actionSuggestion = "The minimum deposit amount is 100 USDC.";
+      } else if (errorMessage.includes("execution reverted")) {
+        // Try to provide more context
+        actionSuggestion =
+          "There may be an issue with the vault configuration. Try a smaller amount or contact support.";
+      }
+
+      // Show error toast with detailed information
       toast.error("Deposit failed", {
-        description: error.message || "Transaction failed. Please try again.",
+        id: pendingToast,
+        description: (
+          <div className="space-y-2">
+            <p className="font-medium">{errorMessage}</p>
+            {actionSuggestion && <p className="text-sm">{actionSuggestion}</p>}
+          </div>
+        ),
       });
+
+      throw error; // Re-throw for promise chaining
     }
   };
 
