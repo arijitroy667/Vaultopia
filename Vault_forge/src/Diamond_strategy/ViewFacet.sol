@@ -141,7 +141,10 @@ contract ViewFacet {
         // Calculate the value of matured/unmatured deposits
         for (uint256 i = 0; i < deposits.length; i++) {
             if (!deposits[i].withdrawn) {
-                if (block.timestamp >= deposits[i].timestamp + DiamondStorage.LOCK_PERIOD) {
+                if (
+                    block.timestamp >=
+                    deposits[i].timestamp + DiamondStorage.LOCK_PERIOD
+                ) {
                     maturedValue += deposits[i].amount;
                 } else {
                     unmaturedValue += deposits[i].amount;
@@ -192,7 +195,9 @@ contract ViewFacet {
 
     function isUpdateNeeded() external view returns (bool) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        return block.timestamp >= ds.lastDailyUpdate + DiamondStorage.UPDATE_INTERVAL;
+        return
+            block.timestamp >=
+            ds.lastDailyUpdate + DiamondStorage.UPDATE_INTERVAL;
     }
 
     function maxWithdraw(address _owner) external view returns (uint256) {
@@ -204,7 +209,8 @@ contract ViewFacet {
         for (uint256 i = 0; i < ds.userStakedDeposits[_owner].length; i++) {
             if (
                 block.timestamp >=
-                ds.userStakedDeposits[_owner][i].timestamp + DiamondStorage.LOCK_PERIOD
+                ds.userStakedDeposits[_owner][i].timestamp +
+                    DiamondStorage.LOCK_PERIOD
             ) {
                 hasUnlockedDeposits = true;
                 break;
@@ -212,7 +218,9 @@ contract ViewFacet {
         }
 
         if (!hasUnlockedDeposits) {
-            return (ds.totalAssets * DiamondStorage.INSTANT_WITHDRAWAL_LIMIT) / 100;
+            return
+                (ds.totalAssets * DiamondStorage.INSTANT_WITHDRAWAL_LIMIT) /
+                100;
         }
         return totalUserAssets;
     }
@@ -224,5 +232,20 @@ contract ViewFacet {
             return shares;
         }
         return (shares * ds.totalAssets) / ds.totalShares;
+    }
+
+    function accumulatedFees() external view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        return ds.accumulatedFees;
+    }
+
+    function lastUpdateTime() external view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        return ds.lastUpdateTime;
+    }
+
+    function lastDailyUpdate() external view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        return ds.lastDailyUpdate;
     }
 }

@@ -53,6 +53,7 @@
 //         factory = _factory;
 //         WETH = _WETH;
 //         USDC = _USDC;
+//         owner = msg.sender;
 //         receiverContract = _receiverContract;
 //     }
 

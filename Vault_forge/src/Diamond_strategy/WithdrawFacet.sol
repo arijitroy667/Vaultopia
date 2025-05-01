@@ -1,326 +1,393 @@
-// // SPDX-License-Identifier: MIT
-// pragma solidity ^0.8.20;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-// import "./DiamondStorage.sol";
-// import "./Modifiers.sol";
-// import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-// import "@openzeppelin/contracts/utils/math/Math.sol";
+import "./DiamondStorage.sol";
+import "./Modifiers.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
-// //import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+interface ILidoWithdrawal {
+    function requestWithdrawals(
+        uint256[] calldata amounts,
+        address recipient
+    ) external returns (uint256[] memory requestIds);
 
-// interface ILidoWithdrawal {
-//     function requestWithdrawals(
-//         uint256[] calldata amounts,
-//         address recipient
-//     ) external returns (uint256[] memory requestIds);
+    function isWithdrawalFinalized(
+        uint256 requestId
+    ) external view returns (bool);
+}
 
-//     function isWithdrawalFinalized(
-//         uint256 requestId
-//     ) external view returns (bool);
-// }
+interface IWstETH {
+    function unwrap(uint256 _wstETHAmount) external returns (uint256);
 
-// interface IWstETH {
-//     function unwrap(uint256 _wstETHAmount) external returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+}
 
-//     function approve(address spender, uint256 amount) external returns (bool);
-// }
+interface IReceiver {
+    function claimWithdrawalFromLido(
+        uint256 requestId,
+        address user,
+        uint256 minUSDCExpected
+    ) external returns (uint256, uint256); // Return both ETH and USDC amounts
+}
 
-// interface IReceiver {
-//     function claimWithdrawalFromLido(
-//         uint256 requestId,
-//         address user,
-//         uint256 minUSDCExpected
-//     ) external returns (uint256);
-// }
+contract WithdrawFacet is Modifiers {
+    using SafeERC20 for IERC20;
+    using Math for uint256;
 
-// contract WithdrawFacet is Modifiers {
-//     using SafeERC20 for IERC20;
-//     using Math for uint256;
+    // Error definitions
+    error EmergencyShutdown();
+    error WithdrawalNotReady();
+    error SlippageTooHigh(uint256 received, uint256 expected);
+    error NoSharesToMint();
+    error InvalidAmount();
+    error NoWithdrawalInProgress();
+    error WithdrawalAlreadyInProgress();
+    error AddressNotSet();
+    error NoEligibleDeposits();
+    error ExternalCallFailed();
 
-//     // Error definitions
-//     error EmergencyShutdown();
-//     error WithdrawalNotReady();
-//     error SlippageTooHigh(uint256 received, uint256 expected);
-//     error NoSharesToMint();
-//     error InvalidAmount();
-//     error NoWithdrawalInProgress();
+    // Events
+    event Withdraw(
+        address indexed sender,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
+    event WithdrawalFromLidoInitiated(
+        address indexed user,
+        uint256 wstETHAmount,
+        uint256 stETHAmount,
+        uint256 timestamp
+    );
+    event WithdrawalProcessed(
+        address indexed user,
+        uint256 ethReceived,
+        uint256 usdcReceived,
+        uint256 fee,
+        uint256 sharesMinted
+    );
+    event StakedAssetsReturned(address indexed user, uint256 usdcReceived);
+    event LidoWithdrawalCompleted(address indexed user, uint256 ethReceived);
+    event PerformanceFeeCollected(address indexed user, uint256 fee);
 
-//     // Events
-//     event Withdraw(
-//         address indexed sender,
-//         address indexed receiver,
-//         address indexed owner,
-//         uint256 assets,
-//         uint256 shares
-//     );
-//     event WithdrawalFromLidoInitiated(
-//         address indexed user,
-//         uint256 wstETHAmount
-//     );
-//     event WithdrawalProcessed(
-//         address indexed user,
-//         uint256 ethReceived,
-//         uint256 usdcReceived,
-//         uint256 fee,
-//         uint256 sharesMinted
-//     );
-//     event StakedAssetsReturned(address indexed user, uint256 usdcReceived);
-//     event LidoWithdrawalCompleted(address indexed user, uint256 ethReceived);
-//     event PerformanceFeeCollected(address indexed user, uint256 fee);
+    function withdraw(
+        uint256 assets,
+        address receiver,
+        address _owner
+    ) external nonReentrantVault returns (uint256 shares) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
-//     function withdraw(
-//         uint256 assets,
-//         address receiver,
-//         address _owner
-//     ) external nonReentrantVault returns (uint256 shares) {
-//         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        // Basic validations
+        if (assets == 0) revert InvalidAmount();
+        if (receiver == address(0)) revert InvalidAmount();
+        if (ds.emergencyShutdown) revert EmergencyShutdown();
+        if (msg.sender != _owner) revert("Not authorized");
 
-//         // Basic validations
-//         require(assets > 0, "Assets must be greater than zero");
-//         require(receiver != address(0), "Invalid receiver");
-//         require(!ds.emergencyShutdown, "Withdrawals suspended");
-//         require(msg.sender == _owner, "Not authorized");
+        // Calculate withdrawable amount based on matured deposits only
+        uint256 totalBalance = convertToAssets(ds.balances[_owner]);
+        uint256 withdrawableAmount = calculateWithdrawableAmount(_owner);
 
-//         // Calculate withdrawable amount based on matured deposits only
-//         uint256 totalBalance = convertToAssets(ds.balances[_owner]);
-//         uint256 withdrawableAmount = 0;
+        // Ensure user isn't withdrawing more than their mature deposits
+        if (assets > withdrawableAmount)
+            revert("Amount exceeds unlocked balance");
 
-//         // Only count deposits that have completed their lock period
-//         for (uint256 i = 0; i < ds.userStakedDeposits[_owner].length; i++) {
-//             if (
-//                 block.timestamp >=
-//                 ds.userStakedDeposits[_owner][i].timestamp + DiamondStorage.LOCK_PERIOD
-//             ) {
-//                 withdrawableAmount += ds.userStakedDeposits[_owner][i].amount;
-//             }
-//         }
+        // Also verify they have sufficient total balance
+        if (assets > totalBalance) revert("Amount exceeds total balance");
 
-//         // Ensure user isn't withdrawing more than their mature deposits
-//         require(
-//             assets <= withdrawableAmount,
-//             "Amount exceeds unlocked balance"
-//         );
+        // Calculate shares to burn
+        shares = previewWithdraw(assets);
+        if (shares > ds.balances[_owner]) revert("Insufficient shares");
 
-//         // Also verify they have sufficient total balance
-//         require(assets <= totalBalance, "Amount exceeds total balance");
+        // Update state (following checks-effects-interactions pattern)
+        ds.balances[_owner] -= shares;
+        ds.totalShares -= shares;
+        ds.totalAssets -= assets;
 
-//         // Calculate shares to burn
-//         shares = previewWithdraw(assets);
-//         require(shares <= ds.balances[_owner], "Insufficient shares");
+        // Transfer assets - this is the external interaction
+        IERC20(ds.ASSET_TOKEN_ADDRESS).safeTransfer(receiver, assets);
 
-//         // Update state
-//         ds.balances[_owner] -= shares;
-//         ds.totalShares -= shares;
-//         ds.totalAssets -= assets;
+        emit Withdraw(msg.sender, receiver, _owner, assets, shares);
+        return shares;
+    }
 
-//         // Transfer assets
-//         IERC20(ds.ASSET_TOKEN_ADDRESS).safeTransfer(receiver, assets);
+    function processCompletedWithdrawals(
+        address user,
+        uint256 minUSDCExpected
+    )
+        external
+        nonReentrantVault
+        onlyAuthorizedOperator
+        returns (uint256 sharesMinted, uint256 usdcReceived)
+    {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
-//         emit Withdraw(msg.sender, receiver, _owner, assets, shares);
-//         return shares;
-//     }
+        // Input validation
+        if (!ds.withdrawalInProgress[user]) revert NoWithdrawalInProgress();
+        if (user == address(0)) revert InvalidAmount();
+        if (minUSDCExpected == 0) revert InvalidAmount();
+        if (ds.lidoWithdrawalAddress == address(0)) revert AddressNotSet();
+        if (ds.receiverContract == address(0)) revert AddressNotSet();
 
-//     function processCompletedWithdrawals(
-//         address user,
-//         uint256 minUSDCExpected
-//     )
-//         external
-//         nonReentrantVault
-//         onlyAuthorizedOperator
-//         returns (uint256 sharesMinted, uint256 usdcReceived)
-//     {
-//         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        uint256 requestId = ds.withdrawalRequestIds[user];
 
-//         // Input validation
-//         if (!ds.withdrawalInProgress[user]) revert NoWithdrawalInProgress();
-//         if (user == address(0)) revert InvalidAmount();
-//         if (minUSDCExpected == 0) revert InvalidAmount();
+        // Check withdrawal status first
+        if (
+            !ILidoWithdrawal(ds.lidoWithdrawalAddress).isWithdrawalFinalized(
+                requestId
+            )
+        ) {
+            revert WithdrawalNotReady();
+        }
 
-//         uint256 requestId = ds.withdrawalRequestIds[user];
-//         uint256 withdrawnAmount = 0;
-//         uint256 withdrawnWstETH = 0;
+        // Calculate withdrawn amounts
+        (
+            uint256 withdrawnAmount,
+            uint256 withdrawnWstETH
+        ) = getWithdrawnAmounts(user);
 
-//         for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
-//             if (ds.userStakedDeposits[user][i].withdrawn) {
-//                 withdrawnWstETH += ds.userStakedDeposits[user][i].wstETHAmount;
-//                 withdrawnAmount += ds.userStakedDeposits[user][i].amount;
-//             }
-//         }
+        if (withdrawnAmount == 0) revert InvalidAmount();
 
-//         // Only reduce by the amount being withdrawn
-//         ds.stakedPortions[user] -= withdrawnAmount;
-//         ds.userWstETHBalance[user] -= withdrawnWstETH;
+        // Have Receiver claim and process the withdrawal - before state changes
+        // Update return type to get both ETH and USDC amounts
+        uint256 ethReceived;
+        (ethReceived, usdcReceived) = IReceiver(ds.receiverContract)
+            .claimWithdrawalFromLido(requestId, user, minUSDCExpected);
 
-//         // Check withdrawal status
-//         if (
-//             !ILidoWithdrawal(ds.lidoWithdrawalAddress).isWithdrawalFinalized(
-//                 requestId
-//             )
-//         ) {
-//             revert WithdrawalNotReady();
-//         }
+        if (usdcReceived < minUSDCExpected)
+            revert SlippageTooHigh(usdcReceived, minUSDCExpected);
 
-//         // Clear withdrawal state first
-//         ds.withdrawalInProgress[user] = false;
-//         delete ds.withdrawalRequestIds[user];
+        // Now that external call succeeded, update state
+        ds.withdrawalInProgress[user] = false;
+        delete ds.withdrawalRequestIds[user];
 
-//         // Have Receiver claim and process the withdrawal
-//         usdcReceived = IReceiver(ds.receiverContract).claimWithdrawalFromLido(
-//             requestId,
-//             user,
-//             minUSDCExpected
-//         );
+        // Only reduce by the amount being withdrawn
+        ds.stakedPortions[user] -= withdrawnAmount;
+        ds.userWstETHBalance[user] -= withdrawnWstETH;
 
-//         if (usdcReceived < minUSDCExpected)
-//             revert SlippageTooHigh(usdcReceived, minUSDCExpected);
+        // Calculate and handle fees
+        uint256 yield = usdcReceived > withdrawnAmount
+            ? usdcReceived - withdrawnAmount
+            : 0;
+        uint256 fee = calculateFee(yield);
+        uint256 userAmount = usdcReceived - fee;
 
-//         // Calculate and handle fees
-//         uint256 yield = usdcReceived > withdrawnAmount
-//             ? usdcReceived - withdrawnAmount
-//             : 0;
-//         uint256 fee = calculateFee(yield);
-//         uint256 userAmount = usdcReceived - fee;
+        // Update fee accounting
+        if (fee > 0) {
+            ds.accumulatedFees += fee;
+            emit PerformanceFeeCollected(user, fee);
+        }
 
-//         // Update fee accounting
-//         if (fee > 0) {
-//             ds.accumulatedFees += fee;
-//             emit PerformanceFeeCollected(user, fee);
-//         }
+        // Calculate and mint shares
+        sharesMinted = convertToShares(userAmount);
+        if (sharesMinted == 0) revert NoSharesToMint();
 
-//         // Calculate and mint shares
-//         sharesMinted = convertToShares(userAmount);
-//         if (sharesMinted == 0) revert NoSharesToMint();
+        // Update global state
+        ds.totalStakedValue -= withdrawnAmount;
+        ds.totalAssets += userAmount;
+        ds.totalShares += sharesMinted;
+        ds.balances[user] += sharesMinted;
 
-//         // Update global state
-//         ds.totalStakedValue -= withdrawnAmount;
-//         ds.totalAssets += userAmount;
-//         ds.totalShares += sharesMinted;
-//         ds.balances[user] += sharesMinted;
+        // Emit events with accurate values
+        emit WithdrawalProcessed(
+            user,
+            ethReceived, // Use actual ETH received
+            usdcReceived,
+            fee,
+            sharesMinted
+        );
+        emit StakedAssetsReturned(user, userAmount);
+        emit LidoWithdrawalCompleted(user, ethReceived); // Use actual ETH received
 
-//         // Emit events
-//         emit WithdrawalProcessed(
-//             user,
-//             0, // ETH received by Receiver
-//             usdcReceived,
-//             fee,
-//             sharesMinted
-//         );
-//         emit StakedAssetsReturned(user, userAmount);
-//         emit LidoWithdrawalCompleted(user, 0);
+        return (sharesMinted, userAmount);
+    }
 
-//         return (sharesMinted, userAmount);
-//     }
+    function safeProcessCompletedWithdrawal(
+        address user
+    ) external onlyContract returns (bool) {
+        if (user == address(0)) revert InvalidAmount();
 
-//     function safeProcessCompletedWithdrawal(
-//         address user
-//     ) external onlyContract returns (bool) {
-//         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
-//         // Calculate withdrawn amount
-//         uint256 withdrawnAmount = 0;
-//         for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
-//             if (ds.userStakedDeposits[user][i].withdrawn) {
-//                 withdrawnAmount += ds.userStakedDeposits[user][i].amount;
-//             }
-//         }
+        // Verify withdrawal is in progress
+        if (!ds.withdrawalInProgress[user]) revert NoWithdrawalInProgress();
 
-//         // Calculate minimum expected USDC with slippage protection
-//         uint256 minExpectedUSDC = (withdrawnAmount *
-//             DiamondStorage.AUTO_WITHDRAWAL_SLIPPAGE) / 1000;
+        // Calculate withdrawn amount
+        (uint256 withdrawnAmount, ) = getWithdrawnAmounts(user);
+        if (withdrawnAmount == 0) revert InvalidAmount();
 
-//         // Process the withdrawal
-//         this.processCompletedWithdrawals(user, minExpectedUSDC);
-//         return true;
-//     }
+        // Calculate minimum expected USDC with slippage protection
+        uint256 minExpectedUSDC = (withdrawnAmount *
+            DiamondStorage.AUTO_WITHDRAWAL_SLIPPAGE) / 1000;
 
-//     function safeInitiateWithdrawal(
-//         address user
-//     ) external onlyContract returns (bool) {
-//         // Call internal function
-//         initiateAutomaticWithdrawal(user);
-//         return true;
-//     }
+        // Process the withdrawal
+        try this.processCompletedWithdrawals(user, minExpectedUSDC) returns (
+            uint256,
+            uint256
+        ) {
+            return true;
+        } catch {
+            // Don't revert the entire transaction if processing fails
+            return false;
+        }
+    }
 
-//     function initiateAutomaticWithdrawal(address user) internal {
-//         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-//         require(ds.userWstETHBalance[user] > 0, "No wstETH to withdraw");
+    function safeInitiateWithdrawal(
+        address user
+    ) external onlyContract returns (bool) {
+        if (user == address(0)) revert InvalidAmount();
 
-//         uint256 totalWstETHToWithdraw = 0;
-//         uint256 totalAmountWithdrawn = 0;
+        try this.publicInitiateWithdrawal(user) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
 
-//         for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
-//             if (
-//                 !ds.userStakedDeposits[user][i].withdrawn &&
-//                 block.timestamp >=
-//                 ds.userStakedDeposits[user][i].timestamp + DiamondStorage.LOCK_PERIOD
-//             ) {
-//                 totalWstETHToWithdraw += ds
-//                 .userStakedDeposits[user][i].wstETHAmount;
-//                 totalAmountWithdrawn += ds.userStakedDeposits[user][i].amount;
-//                 ds.userStakedDeposits[user][i].withdrawn = true;
-//             }
-//         }
+    function initiateAutomaticWithdrawal(address user) internal {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
-//         // Only proceed if there's something to withdraw
-//         require(totalWstETHToWithdraw > 0, "No eligible deposits to withdraw");
+        // Add critical validations
+        if (ds.withdrawalInProgress[user]) revert WithdrawalAlreadyInProgress();
+        if (ds.wstETHAddress == address(0)) revert AddressNotSet();
+        if (ds.lidoWithdrawalAddress == address(0)) revert AddressNotSet();
+        if (ds.receiverContract == address(0)) revert AddressNotSet();
+        if (ds.userWstETHBalance[user] == 0) revert("No wstETH to withdraw");
 
-//         ds.withdrawalInProgress[user] = true;
+        (uint256 totalWstETHToWithdraw, ) = getEligibleWithdrawalAmounts(user);
 
-//         // First unwrap wstETH to stETH
-//         IWstETH(ds.wstETHAddress).approve(
-//             ds.lidoWithdrawalAddress,
-//             totalWstETHToWithdraw
-//         );
-//         uint256 stETHAmount = IWstETH(ds.wstETHAddress).unwrap(
-//             totalWstETHToWithdraw
-//         );
+        // Only proceed if there's something to withdraw
+        if (totalWstETHToWithdraw == 0) revert NoEligibleDeposits();
 
-//         // Request withdrawal from Lido
-//         uint256[] memory amounts = new uint256[](1);
-//         amounts[0] = stETHAmount;
-//         uint256[] memory requestIds = ILidoWithdrawal(ds.lidoWithdrawalAddress)
-//             .requestWithdrawals(amounts, ds.receiverContract);
+        // Set withdrawal in progress FIRST (follow checks-effects-interactions)
+        ds.withdrawalInProgress[user] = true;
 
-//         ds.withdrawalRequestIds[user] = requestIds[0];
-//         emit WithdrawalFromLidoInitiated(user, totalWstETHToWithdraw);
-//     }
+        // First unwrap wstETH to stETH
+        bool approveSuccess = IWstETH(ds.wstETHAddress).approve(
+            ds.lidoWithdrawalAddress,
+            totalWstETHToWithdraw
+        );
+        if (!approveSuccess) revert ExternalCallFailed();
 
-//     // Utility functions
-//     function calculateFee(uint256 yield) internal pure returns (uint256) {
-//         if (yield == 0) return 0;
+        uint256 stETHAmount = IWstETH(ds.wstETHAddress).unwrap(
+            totalWstETHToWithdraw
+        );
 
-//         uint256 fee = (yield*DiamondStorage.PERFORMANCE_FEE)/(DiamondStorage.FEE_DENOMINATOR);
+        // Request withdrawal from Lido
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = stETHAmount;
+        uint256[] memory requestIds = ILidoWithdrawal(ds.lidoWithdrawalAddress)
+            .requestWithdrawals(amounts, ds.receiverContract);
 
-//         // Don't charge minimum fee if yield is too small
-//         if (yield <= DiamondStorage.MINIMUM_FEE) {
-//             return yield;
-//         }
+        ds.withdrawalRequestIds[user] = requestIds[0];
+        emit WithdrawalFromLidoInitiated(
+            user,
+            totalWstETHToWithdraw,
+            stETHAmount,
+            block.timestamp
+        );
+    }
 
-//         return Math.min(fee, yield);
-//     }
+    // Helper function to get eligible withdrawal amounts
+    function getEligibleWithdrawalAmounts(
+        address user
+    ) internal returns (uint256 totalWstETH, uint256 totalAmount) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
-//     function previewWithdraw(
-//         uint256 assets
-//     ) public view returns (uint256 shares) {
-//         require(assets > 0, "Assets must be greater than zero");
-//         shares = convertToShares(assets);
-//         return shares > 0 ? shares : 1; // Ensure at least 1 share is burned
-//     }
+        for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
+            if (
+                !ds.userStakedDeposits[user][i].withdrawn &&
+                block.timestamp >=
+                ds.userStakedDeposits[user][i].timestamp +
+                    DiamondStorage.LOCK_PERIOD
+            ) {
+                totalWstETH += ds.userStakedDeposits[user][i].wstETHAmount;
+                totalAmount += ds.userStakedDeposits[user][i].amount;
+                ds.userStakedDeposits[user][i].withdrawn = true;
+            }
+        }
 
-//     function convertToShares(uint256 assets) public view returns (uint256) {
-//         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        return (totalWstETH, totalAmount);
+    }
 
-//         if (ds.totalAssets == 0 || ds.totalShares == 0) {
-//             return assets;
-//         }
-//         return (assets * ds.totalShares) / ds.totalAssets;
-//     }
+    // Helper function to calculate withdrawable amount
+    function calculateWithdrawableAmount(
+        address user
+    ) internal view returns (uint256 withdrawable) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
-//     function convertToAssets(uint256 shares) public view returns (uint256) {
-//         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-//         if (ds.totalShares == 0) {
-//             return shares;
-//         }
-//         return (shares * ds.totalAssets) / ds.totalShares;
-//     }
-// }
+        for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
+            if (
+                block.timestamp >=
+                ds.userStakedDeposits[user][i].timestamp +
+                    DiamondStorage.LOCK_PERIOD
+            ) {
+                withdrawable += ds.userStakedDeposits[user][i].amount;
+            }
+        }
+
+        return withdrawable;
+    }
+
+    // Helper function to get withdrawn amounts
+    function getWithdrawnAmounts(
+        address user
+    ) internal view returns (uint256 amount, uint256 wstETH) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
+            if (ds.userStakedDeposits[user][i].withdrawn) {
+                wstETH += ds.userStakedDeposits[user][i].wstETHAmount;
+                amount += ds.userStakedDeposits[user][i].amount;
+            }
+        }
+
+        return (amount, wstETH);
+    }
+
+    // Utility functions
+    function calculateFee(uint256 yield) internal pure returns (uint256) {
+        if (yield == 0) return 0;
+
+        uint256 fee = (yield * DiamondStorage.PERFORMANCE_FEE) /
+            DiamondStorage.FEE_DENOMINATOR;
+
+        // Don't charge fees for small yields
+        if (yield <= DiamondStorage.MINIMUM_FEE) {
+            return 0;
+        }
+
+        return Math.min(fee, yield);
+    }
+
+    function previewWithdraw(
+        uint256 assets
+    ) public view returns (uint256 shares) {
+        if (assets == 0) revert InvalidAmount();
+
+        shares = convertToShares(assets);
+        return shares > 0 ? shares : 1; // Ensure at least 1 share is burned
+    }
+
+    function convertToShares(uint256 assets) public view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        if (ds.totalAssets == 0 || ds.totalShares == 0) {
+            return assets;
+        }
+        return (assets * ds.totalShares) / ds.totalAssets;
+    }
+
+    function convertToAssets(uint256 shares) public view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        if (ds.totalShares == 0) {
+            return shares;
+        }
+        return (shares * ds.totalAssets) / ds.totalShares;
+    }
+
+    function publicInitiateWithdrawal(address user) public onlyContract {
+        initiateAutomaticWithdrawal(user);
+    }
+}

@@ -35,7 +35,8 @@ const DIAMOND_ABI = [
   "function lidoWithdrawalAddress() external view returns (address)",
   "function emergencyShutdown() external view returns (bool)",
   "function depositsPaused() external view returns (bool)",
-
+  "function accumulatedFees() external view returns (uint256)",
+  "function lastDailyUpdate() external view returns (uint256)",
   // Admin functions
   "function setPerformanceFee(uint256 fee) external",
   "function setDepositsPaused(bool paused) external",
@@ -435,7 +436,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   });
 
   // Contract addresses from environment variables
-  const diamondAddress = "0xAE778866f50A1d9289728c99a5a1821DA8844f72";
+  const diamondAddress = "0x879Fb6Dd6c64157405845b681184B616c49fB00E";
   const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
 
   // Initialize contracts when wallet connects
@@ -640,6 +641,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
 
   // Core function for approval and deposit
+  // Core function for approval and deposit with better error handling
   const approveAndDeposit = async (
     diamondContract: ethers.Contract,
     usdcContract: ethers.Contract,
@@ -649,6 +651,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     // Convert amount to wei with 6 decimals (USDC)
     const amountWei = ethers.parseUnits(amount.toString(), 6);
     const formattedAddress = ethers.getAddress(userAddress);
+
     // Basic validation
     if (!diamondContract || !usdcContract) {
       throw new Error("Contracts not initialized");
@@ -674,13 +677,61 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       await approveTx.wait();
       console.log("USDC approved successfully");
     }
+
     console.log("Deposit params:", {
       amountWei: amountWei.toString(),
       formattedAddress,
       amountType: typeof amountWei,
     });
-    // Execute deposit with simple direct call - no overrides
-    const tx = await diamondContract.deposit(amountWei, formattedAddress);
+
+    // Try to estimate gas first to get better error messages
+    try {
+      await diamondContract.deposit.estimateGas(amountWei, formattedAddress);
+    } catch (error: any) {
+      console.error("Gas estimation failed:", error);
+
+      // Try to decode custom errors
+      if (error.data) {
+        const errorSignatures = {
+          "0x4f42be3b": "ZeroAmount",
+          "0x430a7c8c": "DepositsPaused",
+          "0x214e81ea": "MinimumDepositNotMet",
+          "0x2a7b344a": "EmergencyShutdown",
+          "0x1140334b": "NoSharesMinted",
+          "0x8ccd08da": "LargeDepositNotTimelocked",
+          "0x7d334ba6": "DepositAlreadyQueued",
+        };
+
+        // Try to extract error signature (first 4 bytes of the error data)
+        const errorSig = error.data.slice(0, 10);
+        if (errorSignatures[errorSig]) {
+          throw new Error(errorSignatures[errorSig]);
+        }
+      }
+
+      // Check for common issues
+      if (error.message) {
+        if (error.message.includes("execution reverted")) {
+          throw new Error(
+            "Contract rejected the transaction. You may need to queue a large deposit first."
+          );
+        }
+      }
+
+      // If we can't decode the error, just pass it through
+      throw error;
+    }
+
+    // Execute deposit with gas limit override
+    const gasEstimate = await diamondContract.deposit.estimateGas(
+      amountWei,
+      formattedAddress
+    );
+    const adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.2); // Add 20% buffer
+
+    const tx = await diamondContract.deposit(amountWei, formattedAddress, {
+      gasLimit: BigInt(adjustedGasLimit),
+    });
 
     console.log("Deposit transaction sent:", tx.hash);
 
@@ -697,6 +748,21 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       txHash: receipt.hash,
       shares: sharesReceived,
     };
+  };
+
+  const queueLargeDeposit = async () => {
+    if (!diamondContract) return;
+    try {
+      const tx = await diamondContract.queueLargeDeposit();
+      await tx.wait();
+      toast.success("Large deposit queued", {
+        description:
+          "Your large deposit has been queued. You can deposit after the timelock period.",
+      });
+    } catch (error) {
+      console.error("Failed to queue large deposit:", error);
+      toast.error("Failed to queue deposit");
+    }
   };
 
   // Real deposit function that interacts with the blockchain
@@ -736,6 +802,28 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         status: "pending",
       };
       setTransactions((prev) => [pendingTx, ...prev]);
+
+      const totalAssets = await diamondContract.totalAssets();
+      const amountWei = ethers.parseUnits(amount.toString(), 6);
+      const isLargeDeposit =
+        totalAssets > 0 &&
+        ethers.getBigInt(amountWei) >
+          ethers.getBigInt(totalAssets) / BigInt(10);
+
+      if (isLargeDeposit) {
+        // Check if deposit is already queued
+        const unlockTime = await diamondContract.largeDepositUnlockTime(
+          address
+        );
+        if (unlockTime === 0 || Date.now() / 1000 < Number(unlockTime)) {
+          toast.error("Large deposit requires queueing", {
+            description:
+              "This deposit exceeds 10% of vault assets and needs to be queued first.",
+          });
+          // Optionally offer to queue it
+          return;
+        }
+      }
 
       // Execute deposit on blockchain
       const result = await approveAndDeposit(

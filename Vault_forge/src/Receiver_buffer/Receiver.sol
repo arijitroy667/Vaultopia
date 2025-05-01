@@ -53,8 +53,11 @@
 //     address public lidoWithdrawalAddress;
 //     bool public autoStake = true; // Auto-stake enabled by default
 
+//     string public constant VERSION = "1.0.0";
+
 //     mapping(bytes32 => uint256) public batchStakes;
 //     mapping(bytes32 => uint256) public batchResults;
+//     mapping(address => uint256) public pendingEth;
 
 //     event ReceivedETH(address indexed sender, uint256 amount, bool autoStaked);
 //     event ETHSentToSwap(uint256 amount);
@@ -122,33 +125,32 @@
 //     }
 
 //     receive() external payable {
-//         if (msg.sender == swapContract && autoStake && msg.value > 0) {
-//             // Stake only the received amount
-//             uint256 ethToStake = msg.value;
-//             // Similar to batchStakeWithLido but with the received amount only
-//             // ...
-//             emit ReceivedETHAndStaked(msg.sender, ethToStake);
+//         if (msg.sender == swapContract) {
+//             // Store ETH for later staking
+//             pendingEth[vaultContract] += msg.value;
+//             emit ReceivedETH(msg.sender, msg.value, false);
 //         } else {
 //             emit ReceivedETH(msg.sender, msg.value, false);
 //         }
 //     }
 
-//     function batchStakeWithLido(
-//         bytes32 batchId
-//     ) external payable returns (uint256) {
+//     function batchStakeWithLido(bytes32 batchId) external returns (uint256) {
 //         require(msg.sender == vaultContract, "Only vault can call");
-//         require(msg.value > 0, "No ETH sent");
 //         require(lidoContract != address(0), "Lido contract not set");
 //         require(wstETHContract != address(0), "wstETH contract not set");
 
+//         uint256 ethToStake = pendingEth[msg.sender];
+//         require(ethToStake > 0, "No ETH available");
+//         pendingEth[msg.sender] = 0; // Clear the pending amount
+
 //         // Record the batch ID
-//         batchStakes[batchId] = msg.value;
+//         batchStakes[batchId] = ethToStake;
 
 //         // Track balances before
 //         uint256 preStETHBalance = ILido(lidoContract).balanceOf(address(this));
 
 //         // Submit ETH to Lido
-//         uint256 stETHReceived = ILido(lidoContract).submit{value: msg.value}(
+//         uint256 stETHReceived = ILido(lidoContract).submit{value: ethToStake}(
 //             address(0)
 //         );
 
@@ -172,9 +174,9 @@
 //         // Record batch result
 //         batchResults[batchId] = wstETHReceived;
 
-//         emit ETHStakedWithLido(msg.value, stETHReceived);
+//         emit ETHStakedWithLido(ethToStake, stETHReceived);
 //         emit WstETHReceived(stETHReceived, wstETHReceived);
-//         emit BatchProcessed(batchId, msg.value, wstETHReceived);
+//         emit BatchProcessed(batchId, ethToStake, wstETHReceived);
 
 //         return wstETHReceived;
 //     }
@@ -184,7 +186,7 @@
 //         uint256 requestId,
 //         address user,
 //         uint256 minUSDCExpected
-//     ) external onlyVault returns (uint256 usdcReceived) {
+//     ) external onlyVault returns (uint256 ethReceived, uint256 usdcReceived) {
 //         require(
 //             lidoWithdrawalAddress != address(0),
 //             "Lido withdrawal contract not set"
@@ -219,7 +221,7 @@
 
 //         emit WithdrawalClaimed(user, requestId, ethReceived, usdcReceived);
 
-//         return usdcReceived;
+//         return (ethReceived, usdcReceived);
 //     }
 
 //     function transferOwnership(address newOwner) external onlyOwner {
@@ -269,5 +271,13 @@
 
 //         (bool success, ) = payable(to).call{value: amount}("");
 //         require(success, "ETH recovery failed");
+//     }
+
+//     function checkContractHealth() external view returns (bool) {
+//         return
+//             vaultContract != address(0) &&
+//             lidoContract != address(0) &&
+//             wstETHContract != address(0) &&
+//             swapContract != address(0);
 //     }
 // }

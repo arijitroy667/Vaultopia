@@ -1,1 +1,0 @@
-[{"inputs":[{"internalType":"address","name":"_receiverContract","type":"address"}],"name":"setReceiverContract","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"_swapContract","type":"address"}],"name":"setSwapContract","outputs":[],"stateMutability":"nonpayable","type":"function"}]
