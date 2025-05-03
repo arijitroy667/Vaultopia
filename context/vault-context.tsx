@@ -756,7 +756,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       }
 
       // Alternative deposit attempt with hardcoded gas limit as fallback
-      if (amount <= 10) {
+      if (amount < 1) {
         // Only try fallback for smaller amounts
         console.log("Attempting fallback deposit with fixed gas limit...");
         try {
