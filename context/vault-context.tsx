@@ -678,6 +678,47 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     ]
   );
 
+  const checkContractConfiguration = async () => {
+    if (!diamondContract) return null;
+
+    try {
+      // Get addresses
+      const swapAddr = "0xdb229c8dDE6A500e0C9A0E031Be17b5A0058e9a1";
+      const receiverAddr = "0x5B04671C547f7B3e4D5E5F6Cea1D908872339CcE";
+      const wstEthAddr = "0x8d09a4502Cc8Cf1547aD300E066060D043f6982D"; // Default wstETH on Holesky
+      const lidoAddr = "0xF0179dEC45a37423EAD4FaD5fCb136197872EAd9"; // Default Lido on Holesky
+
+      console.log("Contract configuration:", {
+        swapContract: swapAddr,
+        receiverContract: receiverAddr,
+        wstETHAddress: wstEthAddr,
+        lidoWithdrawalAddress: lidoAddr,
+        diamondContract: diamondContract.target,
+      });
+
+      // Check if addresses are valid
+      const issues = [];
+      if (!ethers.isAddress(swapAddr) || swapAddr === ethers.ZeroAddress)
+        issues.push("Swap contract not set");
+      if (
+        !ethers.isAddress(receiverAddr) ||
+        receiverAddr === ethers.ZeroAddress
+      )
+        issues.push("Receiver contract not set");
+
+      return {
+        isConfigurationValid: issues.length === 0,
+        issues,
+      };
+    } catch (error) {
+      console.error("Configuration check failed:", error);
+      return {
+        isConfigurationValid: false,
+        issues: ["Failed to check configuration"],
+      };
+    }
+  };
+
   // Core function for approval and deposit with enhanced diagnostics
   const approveAndDeposit = async (
     diamondContract: ethers.Contract,
@@ -738,7 +779,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
       // Try to decode custom errors
       if (error.data) {
-        const errorSignatures = {
+        const errorSignatures: Record<string, string> = {
           "0x4f42be3b": "ZeroAmount",
           "0x430a7c8c": "DepositsPaused",
           "0x214e81ea": "MinimumDepositNotMet",
@@ -746,17 +787,21 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           "0x1140334b": "NoSharesMinted",
           "0x8ccd08da": "LargeDepositNotTimelocked",
           "0x7d334ba6": "DepositAlreadyQueued",
+          "0x08c379a0": "Error", // Add general Solidity error
+          "0x8178553c": "SwapContractNotSet",
+          "0x82b42900": "USDCApprovalFailed",
+          "0xa02cc8c4": "NoEthReceived",
         };
 
         // Try to extract error signature (first 4 bytes of the error data)
         const errorSig = error.data.slice(0, 10);
-        if (errorSignatures[errorSig]) {
+        if (errorSig in errorSignatures) {
           throw new Error(errorSignatures[errorSig]);
         }
       }
 
       // Alternative deposit attempt with hardcoded gas limit as fallback
-      if (amount < 1) {
+      if (amountWei < BigInt("1000000")) {
         // Only try fallback for smaller amounts
         console.log("Attempting fallback deposit with fixed gas limit...");
         try {
@@ -840,7 +885,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     );
 
     // Use a higher buffer for complex operations
-    const adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.5); // Increased to 50% buffer
+    const adjustedGasLimit = Math.min(
+      Math.floor(Number(gasEstimate) * 1.5),
+      1_500_000
+    ); // Increased to 50% buffer
 
     console.log("Deposit gas:", {
       estimated: gasEstimate.toString(),
@@ -928,6 +976,32 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         id: transactionId,
       };
       setTransactions((prev) => [pendingTx, ...prev]);
+
+      const configCheck = await checkContractConfiguration();
+      console.log("Configuration check:", configCheck);
+
+      if (!configCheck?.isConfigurationValid) {
+        // Update toast to show configuration issues
+        toast.error("Contract configuration error", {
+          id: pendingToast,
+          description: `The vault has configuration issues: ${configCheck?.issues?.join(
+            ", "
+          )}`,
+        });
+
+        // Clean up the pending transaction
+        setTransactions((prev) =>
+          prev.map((tx) =>
+            tx.status === "pending" && tx.id === transactionId
+              ? { ...tx, status: "failed", error: "Configuration error" }
+              : tx
+          )
+        );
+
+        throw new Error(
+          `Contract configuration error: ${configCheck?.issues?.join(", ")}`
+        );
+      }
 
       // Run preliminary contract checks in parallel
       const [totalAssets, usdcBalance, usdcDecimals] = await Promise.all([
