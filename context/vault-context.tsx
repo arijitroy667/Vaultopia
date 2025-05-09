@@ -833,44 +833,108 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      console.log("Transaction debug info:", {
+        userAddress: formattedAddress,
+        contractAddress: diamondContract.target,
+        amountWei: amountWei.toString(),
+        timestamp: new Date().toISOString(),
+        error: error.message,
+      });
+
       // Check for common issues
       if (error.message) {
         console.log("Error message:", error.message);
 
         // Try to provide more specific error messages
-        if (error.message.includes("execution reverted")) {
-          // Check specific conditions
-          try {
-            const minDeposit = await diamondContract.minDeposit();
-            if (ethers.getBigInt(amountWei) < ethers.getBigInt(minDeposit)) {
-              throw new Error(
-                `Deposit amount too small. Minimum: ${ethers.formatUnits(
-                  minDeposit,
-                  6
-                )} USDC`
-              );
-            }
+        if (error.message?.includes("execution reverted")) {
+          if (!error.data || error.data === "0x") {
+            // Handle case with no error data
+            console.log("Contract reverted without specific error data");
 
-            const maxDeposit = await diamondContract.maxDeposit(
-              formattedAddress
-            );
-            if (ethers.getBigInt(amountWei) > ethers.getBigInt(maxDeposit)) {
+            // Try to diagnose common issues
+            try {
+              // Check if deposits are paused
+              const paused = await diamondContract.depositsPaused();
+              if (paused) {
+                throw new Error("Deposits are currently paused");
+              }
+
+              // Check for emergency shutdown
+              const shutdown = await diamondContract.emergencyShutdown();
+              if (shutdown) {
+                throw new Error("Vault is in emergency shutdown mode");
+              }
+
+              // Check if deposit amount meets minimum requirement
+              try {
+                const MIN_DEPOSIT = 1_000_000; // 1 USDC in wei (6 decimals)
+                if (ethers.getBigInt(amountWei) < BigInt(MIN_DEPOSIT)) {
+                  throw new Error(`Minimum deposit is 1 USDC`);
+                }
+              } catch (minCheckError) {
+                console.warn("Error checking minimum deposit:", minCheckError);
+              }
+
+              // Check if swap contract is set
+              const swapContract = await diamondContract.swapContract();
+              if (swapContract === ethers.ZeroAddress) {
+                throw new Error("Swap contract not configured");
+              }
+
+              // Check if receiver contract is set
+              const receiverContract = await diamondContract.receiverContract();
+              if (receiverContract === ethers.ZeroAddress) {
+                throw new Error("Receiver contract not configured");
+              }
+
+              // Check for large deposit timelock
+              try {
+                const totalAssets = await diamondContract.totalAssets();
+                const isLargeDeposit =
+                  totalAssets > 0 &&
+                  ethers.getBigInt(amountWei) >
+                    ethers.getBigInt(totalAssets) / BigInt(10);
+
+                if (isLargeDeposit) {
+                  const unlockTime =
+                    await diamondContract.largeDepositUnlockTime(
+                      formattedAddress
+                    );
+                  if (
+                    unlockTime === BigInt(0) ||
+                    BigInt(Math.floor(Date.now() / 1000)) < unlockTime
+                  ) {
+                    throw new Error("Large deposit requires queueing first");
+                  }
+                }
+              } catch (largeDepositError) {
+                if (largeDepositError.message.includes("Large deposit")) {
+                  throw largeDepositError;
+                }
+                console.warn(
+                  "Error checking large deposit:",
+                  largeDepositError
+                );
+              }
+
+              // If all checks pass but still failing, provide a general message
               throw new Error(
-                `Deposit amount too large. Maximum: ${ethers.formatUnits(
-                  maxDeposit,
-                  6
-                )} USDC`
+                "Transaction failed: The vault cannot process your deposit at this time. Please try again later or contact support."
               );
-            }
-          } catch (checkError: any) {
-            if (checkError.message.startsWith("Deposit amount")) {
-              throw checkError;
+            } catch (diagError: any) {
+              if (
+                diagError.message.startsWith("Deposits") ||
+                diagError.message.startsWith("Vault") ||
+                diagError.message.startsWith("Swap") ||
+                diagError.message.startsWith("Receiver") ||
+                diagError.message.startsWith("Minimum") ||
+                diagError.message.startsWith("Large") ||
+                diagError.message.startsWith("Transaction")
+              ) {
+                throw diagError;
+              }
             }
           }
-
-          throw new Error(
-            "Contract rejected the transaction. You may need to check contract configuration or queue a large deposit first."
-          );
         }
       }
 
@@ -950,6 +1014,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     if (!diamondContract?.target)
       throw new Error("Diamond contract not initialized");
     if (!usdcContract?.target) throw new Error("USDC contract not initialized");
+
+    if (amount < 1) {
+      toast.error("Minimum deposit is 1 USDC", {
+        description: "Please increase your deposit amount to at least 1 USDC.",
+      });
+      return;
+    }
 
     // Generate a unique transaction ID to track this deposit
     const transactionId = `deposit-${Date.now()}-${Math.random()
