@@ -44,6 +44,7 @@ library DiamondStorage {
         address swapContract;
         address feeCollector;
         address lidoWithdrawalAddress;
+        address lidoContract;
         address wstETHAddress;
         address receiverContract;
         // Mappings

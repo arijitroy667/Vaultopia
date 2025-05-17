@@ -6,8 +6,31 @@ import "./Modifiers.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
+interface ILido {
+    function submit(address _referral) external payable returns (uint256);
+
+    function balanceOf(address account) external view returns (uint256);
+
+    function approve(address spender, uint256 amount) external returns (bool);
+}
+
+interface IWstETH {
+    function wrap(uint256 _stETHAmount) external returns (uint256);
+
+    function unwrap(uint256 _wstETHAmount) external returns (uint256);
+
+    function getStETHByWstETH(
+        uint256 _wstETHAmount
+    ) external view returns (uint256);
+
+    function getWstETHByStETH(
+        uint256 _stETHAmount
+    ) external view returns (uint256);
+}
+
 interface IUSDC is IERC20 {
     function decimals() external view returns (uint8);
+
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
@@ -18,7 +41,7 @@ interface ISwapContract {
         address to,
         uint deadline
     ) external returns (uint amountOut);
-    
+
     function getETHAmountOut(
         uint usdcAmountIn
     ) external view returns (uint ethAmountOut);
@@ -26,8 +49,11 @@ interface ISwapContract {
 
 interface IReceiver {
     function batchStakeWithLido(
-        bytes32 batchId
+        bytes32 batchId,
+        uint256 amountToStake
     ) external payable returns (uint256);
+
+    function getStakedBalance(address user) external view returns (uint256);
 }
 
 contract DepositFacet is Modifiers {
@@ -41,7 +67,16 @@ contract DepositFacet is Modifiers {
     error NoSharesMinted();
     error LargeDepositNotTimelocked();
     error DepositAlreadyQueued();
-    
+    error SwapContractNotSet();
+    error UnauthorizedCaller();
+    error AmountTooSmall();
+    error USDCApprovalFailed();
+    error NoETHReceived();
+    error BatchAlreadyProcessed();
+    error ReceiverContractNotSet();
+    error LidoContractNotSet();
+    error WstETHContractNotSet();
+
     // Events
     event Deposit(
         address indexed sender,
@@ -64,84 +99,129 @@ contract DepositFacet is Modifiers {
         uint256 stakedUSDC,
         uint256 wstETHReceived
     );
+    event DebugLog(string message, uint256 value);
+    event DepositFailed(address indexed user, uint256 amount, string reason);
+    event BatchRecoveryInitiated(bytes32 indexed batchId);
 
     function deposit(
         uint256 assets,
         address receiver
     ) external nonReentrantVault returns (uint256) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        
+
         // Validations
         if (assets == 0) revert ZeroAmount();
         if (ds.depositsPaused) revert DepositsPaused();
-        if (assets < DiamondStorage.MIN_DEPOSIT_AMOUNT) revert MinimumDepositNotMet();
+        if (assets < DiamondStorage.MIN_DEPOSIT_AMOUNT)
+            revert MinimumDepositNotMet();
         if (ds.emergencyShutdown) revert EmergencyShutdown();
-        
+
         // Calculate shares
         uint256 shares = previewDeposit(assets);
         if (shares == 0) revert NoSharesMinted();
-        
+
         // Check for large deposits that need timelock
         if (ds.totalAssets > 0 && assets > ds.totalAssets / 10) {
             if (
                 ds.largeDepositUnlockTime[msg.sender] == 0 ||
                 block.timestamp < ds.largeDepositUnlockTime[msg.sender]
             ) revert LargeDepositNotTimelocked();
-            
+
             delete ds.largeDepositUnlockTime[msg.sender];
         }
-        
+
         // Register new user if needed
         if (!ds.isExistingUser[receiver]) {
             ds.userAddresses.push(receiver);
             ds.isExistingUser[receiver] = true;
         }
-        
+
         // Calculate staking portion (40%)
         uint256 amountToStake = (assets * DiamondStorage.STAKED_PORTION) / 100;
-        
+
         // Get expected ETH with 1% slippage tolerance
-        uint256 expectedEth = ISwapContract(ds.swapContract).getETHAmountOut(amountToStake);
+        uint256 expectedEth = ISwapContract(ds.swapContract).getETHAmountOut(
+            amountToStake
+        );
         uint256 minExpectedEth = (expectedEth * 99) / 100;
-        
+
         // Update state
         ds.userDeposits[receiver] += assets;
         ds.balances[receiver] += shares;
         ds.totalAssets += assets;
         ds.totalShares += shares;
         ds.depositTimestamps[receiver] = block.timestamp;
-        
+
         // Transfer assets from user to vault
-        IERC20(ds.ASSET_TOKEN_ADDRESS).safeTransferFrom(msg.sender, address(this), assets);
-        
+        IERC20(ds.ASSET_TOKEN_ADDRESS).safeTransferFrom(
+            msg.sender,
+            address(this),
+            assets
+        );
+
         // Automatically initiate staking for 40%
         if (amountToStake > 0) {
             safeTransferAndSwap(minExpectedEth, receiver, amountToStake);
         }
-        
+
         emit Deposit(msg.sender, receiver, assets, shares);
         emit StakeInitiated(
             receiver,
             amountToStake,
             block.timestamp + DiamondStorage.LOCK_PERIOD
         );
-        
+
         return shares;
     }
-    
+
+    // Add to DepositFacet
+    function simplifiedDeposit(
+        uint256 assets,
+        address receiver
+    ) external nonReentrantVault returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        // Basic validations only
+        if (assets == 0) revert ZeroAmount();
+        if (assets < DiamondStorage.MIN_DEPOSIT_AMOUNT)
+            revert MinimumDepositNotMet();
+
+        // Calculate shares
+        uint256 shares = previewDeposit(assets);
+        if (shares == 0) revert NoSharesMinted();
+
+        // Update state
+        ds.userDeposits[receiver] += assets;
+        ds.balances[receiver] += shares;
+        ds.totalAssets += assets;
+        ds.totalShares += shares;
+
+        // Transfer assets from user to vault
+        IERC20(ds.ASSET_TOKEN_ADDRESS).safeTransferFrom(
+            msg.sender,
+            address(this),
+            assets
+        );
+
+        emit Deposit(msg.sender, receiver, assets, shares);
+
+        return shares;
+    }
+
     function safeTransferAndSwap(
         uint256 amountOutMin,
         address beneficiary,
         uint256 amountToStake
     ) public nonReentrantVault returns (uint256) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        
-        require(ds.swapContract != address(0), "Swap contract not set");
-        require(
-            msg.sender == ds.owner || msg.sender == address(this),
-            "Unauthorized"
-        );
-        require(amountToStake > 0, "Amount too small");
+
+        if (ds.receiverContract == address(0)) revert ReceiverContractNotSet();
+        if (ds.lidoContract == address(0)) revert LidoContractNotSet();
+        if (ds.wstETHAddress == address(0)) revert WstETHContractNotSet();
+        if (ds.swapContract == address(0)) revert SwapContractNotSet();
+        if (msg.sender != ds.owner && msg.sender != address(this))
+            revert UnauthorizedCaller();
+        if (amountToStake == 0) revert AmountTooSmall();
 
         bytes32 batchId = keccak256(
             abi.encodePacked(block.timestamp, beneficiary, amountToStake)
@@ -153,34 +233,34 @@ contract DepositFacet is Modifiers {
         // Execute swap for staking
         IUSDC usdc = IUSDC(ds.ASSET_TOKEN_ADDRESS);
         bool success = usdc.approve(ds.swapContract, amountToStake);
-        require(success, "USDC approval failed");
+        if (!success) revert USDCApprovalFailed();
 
         // Calculate deadline (5 minutes from now)
         uint256 deadline = block.timestamp + 300;
 
-
         // Call the swap function with receiver contract as the ETH recipient
-        uint256 ethReceived = ISwapContract(ds.swapContract).swapExactUSDCForETH(
-            amountToStake,
-            amountOutMin,
-            ds.receiverContract, // Send ETH directly to receiver
-            deadline
-        );
+        uint256 ethReceived = ISwapContract(ds.swapContract)
+            .swapExactUSDCForETH(
+                amountToStake,
+                amountOutMin,
+                ds.receiverContract, // Send ETH directly to receiver
+                deadline
+            );
 
-        require(ethReceived > 0, "No ETH received from swap");
+        if (ethReceived == 0) revert NoETHReceived();
 
         // Store the amount of ETH being sent for this user
         ds.pendingEthStakes[beneficiary] = ethReceived;
 
         // Add user to current batch
         ds.stakeBatches[batchId].push(beneficiary);
+        emit DebugLog("ETH received from swap", ethReceived);
 
+        if (ds.processedBatches[batchId]) revert BatchAlreadyProcessed();
         // Call receiver with batch ID - no need to send ETH as it's already sent by the swap
-        uint256 wstETHReceived = IReceiver(ds.receiverContract).batchStakeWithLido{
-            value: 0
-        }(batchId);
+        uint256 wstETHReceived = IReceiver(ds.receiverContract)
+            .batchStakeWithLido{value: 0}(batchId, ethReceived);
 
-        require(!ds.processedBatches[batchId], "Batch already processed");
         ds.processedBatches[batchId] = true;
 
         // Calculate user's share
@@ -198,7 +278,7 @@ contract DepositFacet is Modifiers {
 
         // Clear pending stake
         ds.pendingEthStakes[beneficiary] = 0;
-
+        emit DebugLog("wstETH received", wstETHReceived);
         emit SwapInitiated(
             beneficiary,
             amountToStake,
@@ -219,8 +299,17 @@ contract DepositFacet is Modifiers {
 
     function queueLargeDeposit() external {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        if (ds.largeDepositUnlockTime[msg.sender] != 0) revert DepositAlreadyQueued();
-        ds.largeDepositUnlockTime[msg.sender] = block.timestamp + DiamondStorage.DEPOSIT_TIMELOCK;
+        if (ds.largeDepositUnlockTime[msg.sender] != 0)
+            revert DepositAlreadyQueued();
+        ds.largeDepositUnlockTime[msg.sender] =
+            block.timestamp +
+            DiamondStorage.DEPOSIT_TIMELOCK;
+    }
+
+    function recoverStuckBatch(bytes32 batchId) external onlyOwner {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        ds.processedBatches[batchId] = false;
+        emit BatchRecoveryInitiated(batchId);
     }
 
     // Helper functions moved to ViewFacet
@@ -228,16 +317,16 @@ contract DepositFacet is Modifiers {
         if (assets == 0) revert ZeroAmount();
         return convertToShares(assets);
     }
-    
+
     function convertToShares(uint256 assets) public view returns (uint256) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        
+
         if (ds.totalAssets == 0 || ds.totalShares == 0) {
             return assets;
         }
         return (assets * ds.totalShares) / ds.totalAssets;
     }
-    
+
     function maxDeposit(address receiver) public view returns (uint256) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
         uint256 deposited = ds.userDeposits[receiver];
@@ -245,5 +334,27 @@ contract DepositFacet is Modifiers {
             deposited >= DiamondStorage.MAX_DEPOSIT_PER_USER
                 ? 0
                 : DiamondStorage.MAX_DEPOSIT_PER_USER - deposited;
+    }
+
+    function checkContractSetup()
+        external
+        view
+        returns (
+            bool swapContractSet,
+            bool receiverContractSet,
+            bool lidoContractSet,
+            bool wstEthContractSet,
+            uint256 usdcBalance
+        )
+    {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        return (
+            ds.swapContract != address(0),
+            ds.receiverContract != address(0),
+            ds.lidoContract != address(0),
+            ds.wstETHAddress != address(0),
+            IERC20(ds.ASSET_TOKEN_ADDRESS).balanceOf(address(this))
+        );
     }
 }

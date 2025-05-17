@@ -28,7 +28,7 @@ interface IReceiver {
         uint256 requestId,
         address user,
         uint256 minUSDCExpected
-    ) external returns (uint256, uint256); // Return both ETH and USDC amounts
+    ) external returns (uint256 ethReceived, uint256 usdcReceived); // Return both ETH and USDC amounts
 }
 
 contract WithdrawFacet is Modifiers {
@@ -71,6 +71,7 @@ contract WithdrawFacet is Modifiers {
     event StakedAssetsReturned(address indexed user, uint256 usdcReceived);
     event LidoWithdrawalCompleted(address indexed user, uint256 ethReceived);
     event PerformanceFeeCollected(address indexed user, uint256 fee);
+    event WithdrawalStateReset(address indexed user);
 
     function withdraw(
         uint256 assets,
@@ -245,25 +246,90 @@ contract WithdrawFacet is Modifiers {
         }
     }
 
+    function calculateEligibleWithdrawalAmounts(
+        address user
+    )
+        internal
+        view
+        returns (
+            uint256 totalWstETH,
+            uint256 totalAmount,
+            uint256[] memory eligibleIndexes
+        )
+    {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        // First count eligible deposits to size the array correctly
+        uint256 eligibleCount = 0;
+        for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
+            if (
+                !ds.userStakedDeposits[user][i].withdrawn &&
+                block.timestamp >=
+                ds.userStakedDeposits[user][i].timestamp +
+                    DiamondStorage.LOCK_PERIOD
+            ) {
+                eligibleCount++;
+            }
+        }
+
+        // Initialize array to track eligible deposit indexes
+        eligibleIndexes = new uint256[](eligibleCount);
+        uint256 currentIndex = 0;
+
+        // Calculate totals and store eligible indexes
+        for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
+            if (
+                !ds.userStakedDeposits[user][i].withdrawn &&
+                block.timestamp >=
+                ds.userStakedDeposits[user][i].timestamp +
+                    DiamondStorage.LOCK_PERIOD
+            ) {
+                totalWstETH += ds.userStakedDeposits[user][i].wstETHAmount;
+                totalAmount += ds.userStakedDeposits[user][i].amount;
+                eligibleIndexes[currentIndex] = i;
+                currentIndex++;
+            }
+        }
+
+        return (totalWstETH, totalAmount, eligibleIndexes);
+    }
+
+    function markDepositsAsWithdrawn(
+        address user,
+        uint256[] memory eligibleIndexes
+    ) internal {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        for (uint256 i = 0; i < eligibleIndexes.length; i++) {
+            uint256 depositIndex = eligibleIndexes[i];
+            ds.userStakedDeposits[user][depositIndex].withdrawn = true;
+        }
+    }
+
     function initiateAutomaticWithdrawal(address user) internal {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
-        // Add critical validations
+        // Validations remain the same
         if (ds.withdrawalInProgress[user]) revert WithdrawalAlreadyInProgress();
         if (ds.wstETHAddress == address(0)) revert AddressNotSet();
         if (ds.lidoWithdrawalAddress == address(0)) revert AddressNotSet();
         if (ds.receiverContract == address(0)) revert AddressNotSet();
         if (ds.userWstETHBalance[user] == 0) revert("No wstETH to withdraw");
 
-        (uint256 totalWstETHToWithdraw, ) = getEligibleWithdrawalAmounts(user);
+        // Calculate eligible amounts WITHOUT modifying state
+        uint256 totalWstETHToWithdraw;
+        uint256 totalAmount;
+        uint256[] memory eligibleIndexes;
+        (
+            totalWstETHToWithdraw,
+            totalAmount,
+            eligibleIndexes
+        ) = calculateEligibleWithdrawalAmounts(user);
 
         // Only proceed if there's something to withdraw
         if (totalWstETHToWithdraw == 0) revert NoEligibleDeposits();
 
-        // Set withdrawal in progress FIRST (follow checks-effects-interactions)
-        ds.withdrawalInProgress[user] = true;
-
-        // First unwrap wstETH to stETH
+        // External calls that might fail
         bool approveSuccess = IWstETH(ds.wstETHAddress).approve(
             ds.lidoWithdrawalAddress,
             totalWstETHToWithdraw
@@ -280,13 +346,48 @@ contract WithdrawFacet is Modifiers {
         uint256[] memory requestIds = ILidoWithdrawal(ds.lidoWithdrawalAddress)
             .requestWithdrawals(amounts, ds.receiverContract);
 
+        // All external calls succeeded - NOW update state
+        ds.withdrawalInProgress[user] = true;
         ds.withdrawalRequestIds[user] = requestIds[0];
+
+        // Mark deposits as withdrawn ONLY after successful processing
+        markDepositsAsWithdrawn(user, eligibleIndexes);
+
         emit WithdrawalFromLidoInitiated(
             user,
             totalWstETHToWithdraw,
             stETHAmount,
             block.timestamp
         );
+    }
+
+    // Add status checking function
+    function checkWithdrawalStatus(
+        address user
+    ) external view returns (bool inProgress, bool isFinalized) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        inProgress = ds.withdrawalInProgress[user];
+
+        if (inProgress) {
+            uint256 requestId = ds.withdrawalRequestIds[user];
+            isFinalized = ILidoWithdrawal(ds.lidoWithdrawalAddress)
+                .isWithdrawalFinalized(requestId);
+        }
+
+        return (inProgress, isFinalized);
+    }
+
+    function resetStuckWithdrawalState(address user) external onlyOwner {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        // Verify this is actually a stuck state, not in-progress withdrawal
+        require(ds.withdrawalInProgress[user], "No withdrawal in progress");
+        require(ds.withdrawalRequestIds[user] == 0, "Active request ID exists");
+
+        // Reset state
+        ds.withdrawalInProgress[user] = false;
+
+        emit WithdrawalStateReset(user);
     }
 
     // Helper function to get eligible withdrawal amounts
@@ -389,5 +490,9 @@ contract WithdrawFacet is Modifiers {
 
     function publicInitiateWithdrawal(address user) public onlyContract {
         initiateAutomaticWithdrawal(user);
+    }
+
+    function initiateWithdrawal() external {
+        initiateAutomaticWithdrawal(msg.sender);
     }
 }
