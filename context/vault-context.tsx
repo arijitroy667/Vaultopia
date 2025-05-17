@@ -50,6 +50,12 @@ const DIAMOND_ABI = [
   "function updateWstETHBalance(address user, uint256 amount) external",
   "function triggerDailyUpdate() external",
 
+  "function simplifiedDeposit(uint256 assets, address receiver) external returns (uint256)",
+  "function checkContractSetup() external view returns (bool, bool, bool, bool, uint256)",
+  "function checkWithdrawalStatus(address user) external view returns (bool inProgress, bool isFinalized)",
+  "function recoverStuckBatch(bytes32 batchId) external",
+  "function resetStuckWithdrawalState(address user) external",
+
   "event Deposit(address indexed caller, address indexed owner, uint256 assets, uint256 shares)",
   "event Withdraw(address indexed caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)",
   "error ZeroAmount()",
@@ -76,6 +82,8 @@ interface Transaction {
   status: "pending" | "completed" | "failed";
   txHash?: string; // Transaction hash for blockchain explorer links
   blockNumber?: number; // Block number for additional context
+  id?: string;
+  error?: string;
 }
 
 interface VaultData {
@@ -94,7 +102,9 @@ interface VaultContextType {
   userShares: number;
   transactions: Transaction[];
   isLoading: boolean;
-  deposit: (amount: number) => Promise<void>;
+  deposit: (
+    amount: number
+  ) => Promise<void | { success: boolean; txHash: any; shares: number }>;
   withdraw: (amount: number) => Promise<void>;
   setFee: (fee: number) => Promise<void>;
   togglePause: (paused: boolean) => Promise<void>;
@@ -109,6 +119,22 @@ interface VaultContextType {
   updateWstETHBalance: (user: string, amount: number) => Promise<void>;
   triggerDailyUpdate: () => Promise<void>;
   fetchLidoAPY: () => Promise<number | null>;
+  simplifiedDeposit: (
+    amount: number
+  ) => Promise<{ success: boolean; txHash: any; shares: number }>;
+  checkContractSetup: () => Promise<{
+    swapContractSet: boolean;
+    receiverContractSet: boolean;
+    lidoContractSet: boolean;
+    wstEthContractSet: boolean;
+    usdcBalance: number;
+  }>;
+  checkWithdrawalStatus: (address: string) => Promise<{
+    inProgress: boolean;
+    isFinalized: boolean;
+  }>;
+  recoverStuckBatch: (batchId: string) => Promise<void>;
+  resetStuckWithdrawalState: (address: string) => Promise<void>;
 }
 
 function debounce<T>(func: (...args: any[]) => Promise<T>, wait: number) {
@@ -435,7 +461,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     currentFee: 2.0,
   });
 
-  const diamondAddress = "0x879Fb6Dd6c64157405845b681184B616c49fB00E";
+  const diamondAddress = "0x906E74b5b28192AEfC754AFE012F2B756090E6A4";
   const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
 
   // Initialize contracts when wallet connects
@@ -747,12 +773,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       diamondContract.target
     );
 
-    console.log("USDC Allowance Check:", {
-      currentAllowance: ethers.formatUnits(allowance, 6),
-      requiredAmount: ethers.formatUnits(amountWei, 6),
-      needsApproval: ethers.getBigInt(allowance) < ethers.getBigInt(amountWei),
-    });
-
     if (ethers.getBigInt(allowance) < ethers.getBigInt(amountWei)) {
       console.log("Approving USDC...");
       const approveTx = await usdcContract.approve(
@@ -760,255 +780,34 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         amountWei
       );
       await approveTx.wait();
-      console.log("USDC approved successfully");
     }
 
-    console.log("Deposit params:", {
-      amountWei: amountWei.toString(),
-      formattedAddress,
-      amountType: typeof amountWei,
-    });
+    // Use a safe gas limit with buffer
+    const gasEstimate = await diamondContract.deposit
+      .estimateGas(amountWei, formattedAddress)
+      .catch(() => BigInt(800000)); // Fallback if estimation fails
 
-    // Try to estimate gas first to get better error messages
-    try {
-      console.log("Estimating gas for deposit...");
-      await diamondContract.deposit.estimateGas(amountWei, formattedAddress);
-      console.log("Gas estimation successful!");
-    } catch (error: any) {
-      console.error("Gas estimation failed:", error);
-
-      // Try to decode custom errors
-      if (error.data) {
-        const errorSignatures: Record<string, string> = {
-          "0x4f42be3b": "ZeroAmount",
-          "0x430a7c8c": "DepositsPaused",
-          "0x214e81ea": "MinimumDepositNotMet",
-          "0x2a7b344a": "EmergencyShutdown",
-          "0x1140334b": "NoSharesMinted",
-          "0x8ccd08da": "LargeDepositNotTimelocked",
-          "0x7d334ba6": "DepositAlreadyQueued",
-          "0x08c379a0": "Error", // Add general Solidity error
-          "0x8178553c": "SwapContractNotSet",
-          "0x82b42900": "USDCApprovalFailed",
-          "0xa02cc8c4": "NoEthReceived",
-        };
-
-        // Try to extract error signature (first 4 bytes of the error data)
-        const errorSig = error.data.slice(0, 10);
-        if (errorSig in errorSignatures) {
-          throw new Error(errorSignatures[errorSig]);
-        }
-      }
-
-      // Alternative deposit attempt with hardcoded gas limit as fallback
-      if (amountWei < BigInt("1000000")) {
-        // Only try fallback for smaller amounts
-        console.log("Attempting fallback deposit with fixed gas limit...");
-        try {
-          const fallbackGasLimit = 500000; // Hard-coded safe value
-          const tx = await diamondContract.deposit(
-            amountWei,
-            formattedAddress,
-            {
-              gasLimit: BigInt(fallbackGasLimit),
-            }
-          );
-
-          console.log("Fallback deposit transaction sent:", tx.hash);
-          const receipt = await tx.wait(1);
-          console.log("Fallback transaction confirmed:", receipt);
-
-          const expectedShares = await diamondContract.previewDeposit(
-            amountWei
-          );
-          const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
-
-          return {
-            success: true,
-            txHash: receipt.hash,
-            shares: sharesReceived,
-          };
-        } catch (fallbackError) {
-          console.error("Fallback deposit failed:", fallbackError);
-        }
-      }
-
-      console.log("Transaction debug info:", {
-        userAddress: formattedAddress,
-        contractAddress: diamondContract.target,
-        amountWei: amountWei.toString(),
-        timestamp: new Date().toISOString(),
-        error: error.message,
-      });
-
-      // Check for common issues
-      if (error.message) {
-        console.log("Error message:", error.message);
-
-        // Try to provide more specific error messages
-        if (error.message?.includes("execution reverted")) {
-          if (!error.data || error.data === "0x") {
-            // Handle case with no error data
-            console.log("Contract reverted without specific error data");
-
-            // Try to diagnose common issues
-            try {
-              // Check if deposits are paused
-              const paused = await diamondContract.depositsPaused();
-              if (paused) {
-                throw new Error("Deposits are currently paused");
-              }
-
-              // Check for emergency shutdown
-              const shutdown = await diamondContract.emergencyShutdown();
-              if (shutdown) {
-                throw new Error("Vault is in emergency shutdown mode");
-              }
-
-              // Check if deposit amount meets minimum requirement
-              try {
-                const MIN_DEPOSIT = 1_000_000; // 1 USDC in wei (6 decimals)
-                if (ethers.getBigInt(amountWei) < BigInt(MIN_DEPOSIT)) {
-                  throw new Error(`Minimum deposit is 1 USDC`);
-                }
-              } catch (minCheckError) {
-                console.warn("Error checking minimum deposit:", minCheckError);
-              }
-
-              // Check if swap contract is set
-              const swapContract = await diamondContract.swapContract();
-              if (swapContract === ethers.ZeroAddress) {
-                throw new Error("Swap contract not configured");
-              }
-
-              // Check if receiver contract is set
-              const receiverContract = await diamondContract.receiverContract();
-              if (receiverContract === ethers.ZeroAddress) {
-                throw new Error("Receiver contract not configured");
-              }
-
-              // Check for large deposit timelock
-              try {
-                const totalAssets = await diamondContract.totalAssets();
-                const isLargeDeposit =
-                  totalAssets > 0 &&
-                  ethers.getBigInt(amountWei) >
-                    ethers.getBigInt(totalAssets) / BigInt(10);
-
-                if (isLargeDeposit) {
-                  const unlockTime =
-                    await diamondContract.largeDepositUnlockTime(
-                      formattedAddress
-                    );
-                  if (
-                    unlockTime === BigInt(0) ||
-                    BigInt(Math.floor(Date.now() / 1000)) < unlockTime
-                  ) {
-                    throw new Error("Large deposit requires queueing first");
-                  }
-                }
-              } catch (largeDepositError) {
-                if (largeDepositError.message.includes("Large deposit")) {
-                  throw largeDepositError;
-                }
-                console.warn(
-                  "Error checking large deposit:",
-                  largeDepositError
-                );
-              }
-
-              // If all checks pass but still failing, provide a general message
-              throw new Error(
-                "Transaction failed: The vault cannot process your deposit at this time. Please try again later or contact support."
-              );
-            } catch (diagError: any) {
-              if (
-                diagError.message.startsWith("Deposits") ||
-                diagError.message.startsWith("Vault") ||
-                diagError.message.startsWith("Swap") ||
-                diagError.message.startsWith("Receiver") ||
-                diagError.message.startsWith("Minimum") ||
-                diagError.message.startsWith("Large") ||
-                diagError.message.startsWith("Transaction")
-              ) {
-                throw diagError;
-              }
-            }
-          }
-        }
-      }
-
-      // If we can't decode the error, just pass it through
-      throw error;
-    }
-
-    // Execute deposit with gas limit override
-    const gasEstimate = await diamondContract.deposit.estimateGas(
-      amountWei,
-      formattedAddress
+    const adjustedGasLimit = Math.min(
+      Number(gasEstimate) * 1.3, // 30% buffer
+      1_500_000 // Cap at 1.5M
     );
 
-    // Use a higher buffer for complex operations
-    const adjustedGasLimit = Math.min(
-      Math.floor(Number(gasEstimate) * 1.5),
-      1_500_000
-    ); // Increased to 50% buffer
-
-    console.log("Deposit gas:", {
-      estimated: gasEstimate.toString(),
-      withBuffer: adjustedGasLimit.toString(),
+    // Execute deposit transaction
+    const tx = await diamondContract.deposit(amountWei, formattedAddress, {
+      gasLimit: BigInt(Math.floor(adjustedGasLimit)),
     });
 
-    try {
-      const tx = await diamondContract.deposit(amountWei, formattedAddress, {
-        gasLimit: BigInt(adjustedGasLimit),
-      });
+    const receipt = await tx.wait(1);
+    const expectedShares = await diamondContract.previewDeposit(amountWei);
+    const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
 
-      console.log("Deposit transaction sent:", tx.hash);
-
-      // Wait for transaction confirmation
-      const receipt = await tx.wait(1);
-      console.log("Transaction confirmed:", receipt);
-
-      // Calculate shares received
-      const expectedShares = await diamondContract.previewDeposit(amountWei);
-      const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
-
-      return {
-        success: true,
-        txHash: receipt.hash,
-        shares: sharesReceived,
-      };
-    } catch (txError: any) {
-      console.error("Transaction execution failed:", txError);
-
-      // Add specific checks for transaction failures
-      if (txError.message?.includes("insufficient funds")) {
-        throw new Error(
-          "Insufficient ETH for gas fees. Please add more ETH to your wallet."
-        );
-      }
-
-      throw txError;
-    }
+    return {
+      success: true,
+      txHash: receipt.hash,
+      shares: sharesReceived,
+    };
   };
 
-  const queueLargeDeposit = async () => {
-    if (!diamondContract) return;
-    try {
-      const tx = await diamondContract.queueLargeDeposit();
-      await tx.wait();
-      toast.success("Large deposit queued", {
-        description:
-          "Your large deposit has been queued. You can deposit after the timelock period.",
-      });
-    } catch (error) {
-      console.error("Failed to queue large deposit:", error);
-      toast.error("Failed to queue deposit");
-    }
-  };
-
-  // Real deposit function that interacts with the blockchain
   const deposit = async (amount: number) => {
     if (!isConnected || !address) throw new Error("Wallet not connected");
     if (!diamondContract?.target)
@@ -1016,140 +815,104 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     if (!usdcContract?.target) throw new Error("USDC contract not initialized");
 
     if (amount < 1) {
-      toast.error("Minimum deposit is 1 USDC", {
-        description: "Please increase your deposit amount to at least 1 USDC.",
-      });
+      toast.error("Minimum deposit is 1 USDC");
       return;
     }
 
-    // Generate a unique transaction ID to track this deposit
+    // Generate transaction ID and show pending toast
     const transactionId = `deposit-${Date.now()}-${Math.random()
       .toString(36)
       .substring(2, 9)}`;
-    let pendingToast: string | number | null = null;
+    const pendingToast = toast.loading(
+      `Preparing deposit of $${amount.toLocaleString()}...`
+    );
+
+    // Create pending transaction record
+    const pendingTx: Transaction = {
+      type: "deposit",
+      amount,
+      shares: 0,
+      timestamp: Date.now(),
+      status: "pending",
+      id: transactionId,
+    };
+    setTransactions((prev) => [pendingTx, ...prev]);
 
     try {
-      // Show pending toast with more information
-      pendingToast = toast.loading(
-        `Preparing deposit of $${amount.toLocaleString()}...`,
-        {
-          duration: 60000, // Long duration since we'll manually dismiss
-        }
-      );
+      // Use checkContractSetup to verify contract health
+      const setup = await checkContractSetup();
+      if (
+        !setup.swapContractSet ||
+        !setup.receiverContractSet ||
+        !setup.lidoContractSet ||
+        !setup.wstEthContractSet
+      ) {
+        const issues = [];
+        if (!setup.swapContractSet) issues.push("Swap contract not set");
+        if (!setup.receiverContractSet)
+          issues.push("Receiver contract not set");
+        if (!setup.lidoContractSet) issues.push("Lido contract not set");
+        if (!setup.wstEthContractSet) issues.push("wstETH contract not set");
 
-      // Create & add pending transaction record
-      const pendingTx: Transaction = {
-        type: "deposit",
-        amount,
-        shares: 0,
-        timestamp: Date.now(),
-        status: "pending",
-        id: transactionId,
-      };
-      setTransactions((prev) => [pendingTx, ...prev]);
-
-      const configCheck = await checkContractConfiguration();
-      console.log("Configuration check:", configCheck);
-
-      if (!configCheck?.isConfigurationValid) {
-        // Update toast to show configuration issues
-        toast.error("Contract configuration error", {
-          id: pendingToast,
-          description: `The vault has configuration issues: ${configCheck?.issues?.join(
-            ", "
-          )}`,
-        });
-
-        // Clean up the pending transaction
-        setTransactions((prev) =>
-          prev.map((tx) =>
-            tx.status === "pending" && tx.id === transactionId
-              ? { ...tx, status: "failed", error: "Configuration error" }
-              : tx
-          )
-        );
-
-        throw new Error(
-          `Contract configuration error: ${configCheck?.issues?.join(", ")}`
-        );
+        throw new Error(`Contract configuration issues: ${issues.join(", ")}`);
       }
 
-      // Run preliminary contract checks in parallel
+      // Get user balance and decimals in parallel
       const [totalAssets, usdcBalance, usdcDecimals] = await Promise.all([
         diamondContract.totalAssets(),
         usdcContract.balanceOf(address),
-        usdcContract.decimals().catch(() => 6), // Default to 6 if call fails
+        usdcContract.decimals().catch(() => 6),
       ]);
 
-      // Format amount using actual token decimals
+      // Check USDC balance
       const amountWei = ethers.parseUnits(amount.toString(), usdcDecimals);
-
-      // Check USDC balance before proceeding
       if (ethers.getBigInt(usdcBalance) < ethers.getBigInt(amountWei)) {
         throw new Error(
-          `Insufficient USDC balance. You have ${ethers.formatUnits(
+          `Insufficient USDC balance: ${ethers.formatUnits(
             usdcBalance,
             usdcDecimals
-          )} USDC.`
+          )} USDC`
         );
       }
 
-      // Check if this is a large deposit (>10% of vault)
+      // Handle large deposits (>10% of vault)
       const isLargeDeposit =
         totalAssets > 0 &&
         ethers.getBigInt(amountWei) >
           ethers.getBigInt(totalAssets) / BigInt(10);
 
-      // Handle large deposits properly
       if (isLargeDeposit) {
-        // Update toast to indicate checking unlock time
-        toast.loading("Checking timelock status...", {
-          id: pendingToast,
-        });
-
         const unlockTime = await diamondContract.largeDepositUnlockTime(
           address
         );
-
         if (unlockTime === 0 || Date.now() / 1000 < Number(unlockTime)) {
-          // Clean up the pending transaction
           setTransactions((prev) =>
             prev.filter(
               (tx) => !(tx.status === "pending" && tx.id === transactionId)
             )
           );
 
-          // Update toast to error state
           toast.error("Large deposit requires queueing", {
             id: pendingToast,
             description:
               "This deposit exceeds 10% of vault assets and needs to be queued first.",
           });
 
-          // Prompt user to queue the deposit
           const shouldQueue = window.confirm(
-            "Would you like to queue this large deposit now? You'll be able to complete it after the timelock period."
+            "Queue this large deposit? You'll be able to complete it after the timelock period."
           );
-
-          if (shouldQueue) {
-            return await queueLargeDeposit();
-          }
-
+          if (shouldQueue) return await queueLargeDeposit();
           return;
         }
 
-        // Let user know deposit will proceed
         toast.loading("Timelock completed. Proceeding with deposit...", {
           id: pendingToast,
         });
       }
 
-      // Update toast to show approval/deposit progress
-      toast.loading("Processing deposit transaction...", {
-        id: pendingToast,
-      });
+      toast.loading("Processing deposit transaction...", { id: pendingToast });
 
-      // Execute deposit with more detailed error handling
+      // Execute the deposit
       const result = await approveAndDeposit(
         diamondContract,
         usdcContract,
@@ -1157,10 +920,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         address
       );
 
-      // Update UI state atomically
+      // Update UI state
       setUserShares((prev) => prev + result.shares);
-
-      // Update transaction in a single state update
       setTransactions((prev) => [
         {
           ...pendingTx,
@@ -1173,12 +934,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         ),
       ]);
 
-      // Refresh vault data in background
+      // Refresh vault data and show success toast
       refreshVaultData().catch((err) =>
         console.warn("Background refresh failed:", err)
       );
 
-      // Show success toast with transaction link
       toast.success("Deposit successful", {
         id: pendingToast,
         description: (
@@ -1205,7 +965,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       console.error("Deposit failed:", error);
 
-      // Clean up the pending transaction
+      // Update failed transaction
       setTransactions((prev) =>
         prev.map((tx) =>
           tx.status === "pending" && tx.id === transactionId
@@ -1214,27 +974,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         )
       );
 
-      // Provide more helpful error messages based on error types
-      let errorMessage =
-        error.message || "Transaction failed. Please try again.";
+      // Show error toast with improved messaging
+      const errorMessage = error.message || "Transaction failed";
       let actionSuggestion = "";
 
-      // Handle common error cases with specific suggestions
       if (errorMessage.includes("user rejected")) {
-        errorMessage = "Transaction was rejected.";
         actionSuggestion = "You can try again when you're ready.";
-      } else if (errorMessage.includes("insufficient funds for gas")) {
-        errorMessage = "Not enough ETH for transaction fees.";
-        actionSuggestion = "Please add more ETH to your wallet.";
-      } else if (errorMessage.includes("MinimumDepositNotMet")) {
-        actionSuggestion = "The minimum deposit amount is 100 USDC.";
-      } else if (errorMessage.includes("execution reverted")) {
-        // Try to provide more context
+      } else if (errorMessage.includes("funds")) {
+        actionSuggestion = "Check your wallet balance and try again.";
+      } else if (errorMessage.includes("Contract configuration")) {
         actionSuggestion =
-          "There may be an issue with the vault configuration. Try a smaller amount or contact support.";
+          "The vault is not properly configured. Please contact support.";
       }
 
-      // Show error toast with detailed information
       toast.error("Deposit failed", {
         id: pendingToast,
         description: (
@@ -1245,7 +997,22 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         ),
       });
 
-      throw error; // Re-throw for promise chaining
+      throw error;
+    }
+  };
+
+  const queueLargeDeposit = async () => {
+    if (!diamondContract) return;
+    try {
+      const tx = await diamondContract.queueLargeDeposit();
+      await tx.wait();
+      toast.success("Large deposit queued", {
+        description:
+          "Your large deposit has been queued. You can deposit after the timelock period.",
+      });
+    } catch (error) {
+      console.error("Failed to queue large deposit:", error);
+      toast.error("Failed to queue deposit");
     }
   };
 
@@ -1361,6 +1128,117 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Implementation of simplifiedDeposit
+  const simplifiedDeposit = async (amount: number) => {
+    if (!isConnected || !address) throw new Error("Wallet not connected");
+    if (!diamondContract?.target)
+      throw new Error("Diamond contract not initialized");
+    if (!usdcContract?.target) throw new Error("USDC contract not initialized");
+
+    const pendingToast = toast.loading(
+      `Preparing simplified deposit of $${amount.toLocaleString()}...`
+    );
+
+    try {
+      // Convert amount to wei with 6 decimals (USDC)
+      const amountWei = ethers.parseUnits(amount.toString(), 6);
+
+      // Check and approve USDC allowance
+      const allowance = await usdcContract.allowance(
+        address,
+        diamondContract.target
+      );
+
+      if (ethers.getBigInt(allowance) < ethers.getBigInt(amountWei)) {
+        const approveTx = await usdcContract.approve(
+          diamondContract.target,
+          amountWei
+        );
+        await approveTx.wait();
+      }
+
+      // Execute simplified deposit
+      const tx = await diamondContract.simplifiedDeposit(amountWei, address, {
+        gasLimit: BigInt(300000), // Lower gas limit since this is simpler
+      });
+
+      const receipt = await tx.wait(1);
+
+      // Calculate shares received
+      const expectedShares = await diamondContract.previewDeposit(amountWei);
+      const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
+
+      // Update UI
+      setUserShares((prev) => prev + sharesReceived);
+
+      toast.success("Simplified deposit successful", {
+        id: pendingToast,
+        description: `You have deposited $${amount.toLocaleString()} and received ${sharesReceived.toFixed(
+          4
+        )} shares`,
+      });
+
+      refreshVaultData();
+
+      return {
+        success: true,
+        txHash: receipt.hash,
+        shares: sharesReceived,
+      };
+    } catch (error: any) {
+      console.error("Simplified deposit failed:", error);
+      toast.error("Deposit failed", {
+        id: pendingToast,
+        description: error.message || "Transaction failed",
+      });
+      throw error;
+    }
+  };
+
+  // Implementation of checkContractSetup
+  const checkContractSetup = async () => {
+    if (!diamondContract) throw new Error("Diamond contract not initialized");
+
+    const result = await diamondContract.checkContractSetup();
+
+    return {
+      swapContractSet: result[0],
+      receiverContractSet: result[1],
+      lidoContractSet: result[2],
+      wstEthContractSet: result[3],
+      usdcBalance: Number(ethers.formatUnits(result[4], 6)),
+    };
+  };
+
+  // Implementation of checkWithdrawalStatus
+  const checkWithdrawalStatus = async (userAddress: string) => {
+    if (!diamondContract) throw new Error("Diamond contract not initialized");
+
+    const result = await diamondContract.checkWithdrawalStatus(userAddress);
+
+    return {
+      inProgress: result[0],
+      isFinalized: result[1],
+    };
+  };
+
+  // Add admin recovery functions
+  const recoverStuckBatch = async (batchId: string) => {
+    if (!diamondContract) throw new Error("Diamond contract not initialized");
+
+    const tx = await diamondContract.recoverStuckBatch(batchId);
+    await tx.wait();
+    toast.success("Batch recovery initiated");
+  };
+
+  const resetStuckWithdrawalState = async (userAddress: string) => {
+    if (!diamondContract) throw new Error("Diamond contract not initialized");
+
+    const tx = await diamondContract.resetStuckWithdrawalState(userAddress);
+    await tx.wait();
+    toast.success("Withdrawal state reset successfully");
+  };
+
   // Admin function to set fee
   const setFee = async (fee: number) => {
     if (!diamondContract) return;
@@ -1436,6 +1314,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         updateWstETHBalance,
         triggerDailyUpdate,
         fetchLidoAPY,
+        simplifiedDeposit,
+        checkContractSetup,
+        checkWithdrawalStatus,
+        recoverStuckBatch,
+        resetStuckWithdrawalState,
       }}
     >
       {children}
