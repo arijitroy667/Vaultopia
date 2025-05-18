@@ -43,6 +43,7 @@ const DIAMOND_ABI = [
   "function collectFees() external",
   "function toggleEmergencyShutdown() external",
   "function setLidoWithdrawalAddress(address) external",
+  "function setLidoContract(address) external",
   "function setWstETHAddress(address) external",
   "function setReceiverContract(address) external",
   "function setSwapContract(address) external",
@@ -110,6 +111,7 @@ interface VaultContextType {
   togglePause: (paused: boolean) => Promise<void>;
   refreshVaultData: (includeTransactions?: boolean) => Promise<void>;
   setLidoWithdrawalAddress: (address: string) => Promise<void>;
+  setLidoContract: (address: string) => Promise<void>;
   setWstETHAddress: (address: string) => Promise<void>;
   setReceiverContract: (address: string) => Promise<void>;
   setSwapContract: (address: string) => Promise<void>;
@@ -325,6 +327,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       console.error("Error loading transaction history:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const setLidoContract = async (address: string) => {
+    if (!diamondContract) return;
+    try {
+      const tx = await diamondContract.setLidoContract(address);
+      await tx.wait();
+      toast.success("Lido staking contract address updated");
+    } catch (error) {
+      console.error("Error updating Lido contract:", error);
+      toast.error("Failed to update Lido contract address");
+      throw error;
     }
   };
 
@@ -809,17 +824,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   };
 
   const deposit = async (amount: number) => {
+    // Basic validations
     if (!isConnected || !address) throw new Error("Wallet not connected");
     if (!diamondContract?.target)
       throw new Error("Diamond contract not initialized");
     if (!usdcContract?.target) throw new Error("USDC contract not initialized");
+    if (!signer) throw new Error("Signer not available");
 
     if (amount < 1) {
       toast.error("Minimum deposit is 1 USDC");
       return;
     }
 
-    // Generate transaction ID and show pending toast
+    // Transaction tracking
     const transactionId = `deposit-${Date.now()}-${Math.random()
       .toString(36)
       .substring(2, 9)}`;
@@ -839,43 +856,41 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setTransactions((prev) => [pendingTx, ...prev]);
 
     try {
-      // Use checkContractSetup to verify contract health
-      const setup = await checkContractSetup();
-      if (
-        !setup.swapContractSet ||
-        !setup.receiverContractSet ||
-        !setup.lidoContractSet ||
-        !setup.wstEthContractSet
-      ) {
-        const issues = [];
-        if (!setup.swapContractSet) issues.push("Swap contract not set");
-        if (!setup.receiverContractSet)
-          issues.push("Receiver contract not set");
-        if (!setup.lidoContractSet) issues.push("Lido contract not set");
-        if (!setup.wstEthContractSet) issues.push("wstETH contract not set");
-
-        throw new Error(`Contract configuration issues: ${issues.join(", ")}`);
-      }
-
-      // Get user balance and decimals in parallel
-      const [totalAssets, usdcBalance, usdcDecimals] = await Promise.all([
-        diamondContract.totalAssets(),
-        usdcContract.balanceOf(address),
-        usdcContract.decimals().catch(() => 6),
-      ]);
+      // Convert amount to USDC units (6 decimals)
+      const amountWei = ethers.parseUnits(amount.toString(), 6);
 
       // Check USDC balance
-      const amountWei = ethers.parseUnits(amount.toString(), usdcDecimals);
+      const usdcBalance = await usdcContract.balanceOf(address);
       if (ethers.getBigInt(usdcBalance) < ethers.getBigInt(amountWei)) {
         throw new Error(
           `Insufficient USDC balance: ${ethers.formatUnits(
             usdcBalance,
-            usdcDecimals
+            6
           )} USDC`
         );
       }
 
-      // Handle large deposits (>10% of vault)
+      // Handle USDC approval
+      console.log("Checking USDC allowance...");
+      const allowance = await usdcContract.allowance(
+        address,
+        diamondContract.target
+      );
+
+      if (ethers.getBigInt(allowance) < ethers.getBigInt(amountWei)) {
+        toast.loading("Approving USDC...", { id: pendingToast });
+        console.log("Approving USDC for spending...");
+
+        const approveTx = await usdcContract.approve(
+          diamondContract.target,
+          amountWei
+        );
+        await approveTx.wait();
+        console.log("USDC approved successfully");
+      }
+
+      // Handle large deposits check
+      const totalAssets = await diamondContract.totalAssets();
       const isLargeDeposit =
         totalAssets > 0 &&
         ethers.getBigInt(amountWei) >
@@ -904,66 +919,77 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           if (shouldQueue) return await queueLargeDeposit();
           return;
         }
-
         toast.loading("Timelock completed. Proceeding with deposit...", {
           id: pendingToast,
         });
       }
 
+      // DIRECT CONTRACT METHOD APPROACH
       toast.loading("Processing deposit transaction...", { id: pendingToast });
+      console.log("Preparing deposit transaction with fixed gas limit...");
 
-      // Execute the deposit
-      const result = await approveAndDeposit(
-        diamondContract,
-        usdcContract,
-        amount,
-        address
-      );
+      // Use contract method directly with gas limit parameter
+      const tx = await diamondContract.deposit(amountWei, address, {
+        gasLimit: BigInt(100000), // Fixed safe gas limit
+      });
+
+      console.log("Transaction sent:", tx.hash);
+
+      // Wait for confirmation
+      const receipt = await tx.wait(1);
+      console.log("Transaction confirmed:", receipt);
+
+      // Calculate shares received
+      const expectedShares = await diamondContract.previewDeposit(amountWei);
+      const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
 
       // Update UI state
-      setUserShares((prev) => prev + result.shares);
+      setUserShares((prev) => prev + sharesReceived);
       setTransactions((prev) => [
         {
           ...pendingTx,
-          shares: result.shares,
+          shares: sharesReceived,
           status: "completed",
-          txHash: result.txHash,
+          txHash: receipt.hash,
         },
         ...prev.filter(
           (tx) => !(tx.status === "pending" && tx.id === transactionId)
         ),
       ]);
 
-      // Refresh vault data and show success toast
+      // Refresh vault data
       refreshVaultData().catch((err) =>
         console.warn("Background refresh failed:", err)
       );
 
+      // Show success toast
       toast.success("Deposit successful", {
         id: pendingToast,
         description: (
           <div>
             <p>
               You have deposited ${amount.toLocaleString()} and received{" "}
-              {result.shares.toFixed(4)} shares
+              {sharesReceived.toFixed(4)} shares
             </p>
-            {result.txHash && (
-              <a
-                href={`https://holesky.etherscan.io/tx/${result.txHash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-500 hover:underline"
-              >
-                View transaction on Etherscan →
-              </a>
-            )}
+            <a
+              href={`https://holesky.etherscan.io/tx/${receipt.hash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 hover:underline"
+            >
+              View transaction on Etherscan →
+            </a>
           </div>
         ),
       });
 
-      return result;
+      return {
+        success: true,
+        txHash: receipt.hash,
+        shares: sharesReceived,
+      };
     } catch (error: any) {
-      console.error("Deposit failed:", error);
+      console.error("Deposit failed with detailed error:", error);
 
       // Update failed transaction
       setTransactions((prev) =>
@@ -974,17 +1000,25 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         )
       );
 
-      // Show error toast with improved messaging
-      const errorMessage = error.message || "Transaction failed";
+      // Better error message handling
+      let errorMessage = "Transaction failed";
       let actionSuggestion = "";
 
-      if (errorMessage.includes("user rejected")) {
-        actionSuggestion = "You can try again when you're ready.";
-      } else if (errorMessage.includes("funds")) {
-        actionSuggestion = "Check your wallet balance and try again.";
-      } else if (errorMessage.includes("Contract configuration")) {
-        actionSuggestion =
-          "The vault is not properly configured. Please contact support.";
+      if (error.message) {
+        errorMessage = error.message;
+
+        if (error.message.includes("user rejected")) {
+          errorMessage = "Transaction was rejected";
+          actionSuggestion = "You can try again when you're ready.";
+        } else if (error.message.includes("insufficient funds")) {
+          errorMessage = "Not enough ETH for gas fees";
+          actionSuggestion =
+            "Please add more ETH to your wallet to cover transaction fees.";
+        } else if (error.message.includes("execution reverted")) {
+          errorMessage = "Transaction reverted by the contract";
+          actionSuggestion =
+            "The contract rejected this deposit. There might be an issue with the vault configuration.";
+        }
       }
 
       toast.error("Deposit failed", {
@@ -1305,6 +1339,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         togglePause,
         refreshVaultData,
         setLidoWithdrawalAddress,
+        setLidoContract,
         setWstETHAddress,
         setReceiverContract,
         setSwapContract,
