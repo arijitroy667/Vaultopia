@@ -880,9 +880,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       toast.loading("Processing deposit...", { id: pendingToast });
 
       // IMPORTANT: Use much higher fixed gas limit than before
-      const tx = await diamondContract.deposit(amountWei, address, {
-        gasLimit: 1000000000, // Use a much higher fixed gas limit
-      });
+      const tx = await diamondContract.deposit(amountWei, address);
 
       console.log("Transaction sent:", tx.hash);
       const receipt = await tx.wait(1);
@@ -902,7 +900,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
       return { success: true, txHash: receipt.hash, shares: sharesReceived };
     } catch (error: any) {
-      console.error("Deposit failedzzzzz:", error);
+      console.error("Deposit failed:", error);
 
       // Simplified error handling
       let errorMessage = "Transaction failed";
