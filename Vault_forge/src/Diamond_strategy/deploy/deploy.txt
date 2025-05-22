@@ -2,40 +2,40 @@ Starting Diamond pattern deployment...
 Deployer address: 0x9aD95Ef94D945B039eD5E8059603119b61271486
 1. Deploying DiamondCutFacet...
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\DiamondCutFacet.sol\DiamondCutFacet.json
-DiamondCutFacet deployed to: 0x1226c348934DD01b8Df90fA9463878793F385d97
+DiamondCutFacet deployed to: 0x862463Db8f8c5756273623149CB0e50Cc684AF10
 DiamondCutFacet selectors: 0xee0c950c
 2. Deploying Diamond...
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\Diamond.sol\Diamond.json
-Diamond deployed to: 0x906E74b5b28192AEfC754AFE012F2B756090E6A4
+Diamond deployed to: 0x801215e865067072c853AD8c10a9ec9EB2BAd90A
 3. Deploying all facets...
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\DiamondLoupeFacet.sol\DiamondLoupeFacet.json
-DiamondLoupeFacet deployed to: 0x5Bd1d728225B2784caEE7616C9624647509ECdAd
+DiamondLoupeFacet deployed to: 0xb08eeE23E6D0336074f1E872A7b4ef7Dfbc22799
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\OwnershipFacet.sol\OwnershipFacet.json
-OwnershipFacet deployed to: 0xF1B514F145C818E6B1a5FfcB338A46a7Dc1B4d8e
-Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\DepositFacet.sol\DepositFacet.json
-DepositFacet deployed to: 0xfdAe3bDae51e9B88a116D247C635D274A2e0f5d6
+OwnershipFacet deployed to: 0xF3b0B6864adf6328766DE44415B4BD15e4A8d238
+Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\DepositFacet.sol\DepositFacet.json       
+DepositFacet deployed to: 0xd97D66F55eEA05D1c83A8F91DcBaf3383B1C9D09
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\WithdrawFacet.sol\WithdrawFacet.json
-WithdrawFacet deployed to: 0x5329c166F4ce1108552Fb175e48af343a68C48bf
+WithdrawFacet deployed to: 0x99849830ef80807843784a50E9641Ba0b8B0815c
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\ViewFacet.sol\ViewFacet.json
-ViewFacet deployed to: 0xA07a94A0c7E9e30270Fd2b5837B6FE705c3f8e6b
+ViewFacet deployed to: 0xAdF28c38c9551e143Bd52d7c7c5d0A99A8100cfb
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\AdminFacet.sol\AdminFacet.json
-AdminFacet deployed to: 0x1D5fB48F019b6fD9bB65cF236660D61E97Db5CA2
+AdminFacet deployed to: 0x772E987b5a81d35c4E978B061F112dDC1B0F6BF8
 4. Deploying DiamondInit...
 Looking for artifact at: C:\Users\ariji\Desktop\github\Project_Vault\Vaultopia\Vault_forge\out\DiamondInit.sol\DiamondInit.json
-DiamondInit deployed to: 0x7cc24B270ABDA5c7627BC35704105F6c7f5a1e25
+DiamondInit deployed to: 0xaC83a11560bc2F14C764Da0077Ee096D5b562Dac
 5. Preparing diamond cut data...
 WARNING: Duplicate selector 0xc6e6f592 (convertToShares(uint256)) - already used by DepositFacet (convertToShares(uint256))
 WARNING: Duplicate selector 0x07a2d13a (convertToAssets(uint256)) - already used by WithdrawFacet (convertToAssets(uint256))
-Adding 4 functions from 0x5Bd1d728225B2784caEE7616C9624647509ECdAd
+Adding 4 functions from 0xb08eeE23E6D0336074f1E872A7b4ef7Dfbc22799
   - 0xcdffacc6 (facetAddress(bytes4))
   - 0x52ef6b2c (facetAddresses())
   - 0xadfca15e (facetFunctionSelectors(address))
   - 0x7a0ed627 (facets())
-Adding 3 functions from 0xF1B514F145C818E6B1a5FfcB338A46a7Dc1B4d8e
+Adding 3 functions from 0xF3b0B6864adf6328766DE44415B4BD15e4A8d238
   - 0x8da5cb5b (owner())
   - 0x715018a6 (renounceOwnership())
   - 0xf2fde38b (transferOwnership(address))
-Adding 9 functions from 0xfdAe3bDae51e9B88a116D247C635D274A2e0f5d6
+Adding 9 functions from 0xd97D66F55eEA05D1c83A8F91DcBaf3383B1C9D09
   - 0x31a7a846 (checkContractSetup())
   - 0xc6e6f592 (convertToShares(uint256))
   - 0x6e553f65 (deposit(uint256,address))
@@ -43,9 +43,9 @@ Adding 9 functions from 0xfdAe3bDae51e9B88a116D247C635D274A2e0f5d6
   - 0xef8b30f7 (previewDeposit(uint256))
   - 0x94dddda1 (queueLargeDeposit())
   - 0x6349bfcb (recoverStuckBatch(bytes32))
-  - 0xfaeb488a (safeTransferAndSwap(uint256,address,uint256))
+  - 0xb0f817e3 (safeTransferAndSwap(address,uint256))
   - 0xef27ea3f (simplifiedDeposit(uint256,address))
-Adding 10 functions from 0x5329c166F4ce1108552Fb175e48af343a68C48bf
+Adding 10 functions from 0x99849830ef80807843784a50E9641Ba0b8B0815c
   - 0xeef3d187 (checkWithdrawalStatus(address))
   - 0x07a2d13a (convertToAssets(uint256))
   - 0xb51d1d4f (initiateWithdrawal())
@@ -56,7 +56,7 @@ Adding 10 functions from 0x5329c166F4ce1108552Fb175e48af343a68C48bf
   - 0xe4a29eeb (safeInitiateWithdrawal(address))
   - 0x78433499 (safeProcessCompletedWithdrawal(address))
   - 0xb460af94 (withdraw(uint256,address,address))
-Adding 16 functions from 0xA07a94A0c7E9e30270Fd2b5837B6FE705c3f8e6b
+Adding 16 functions from 0xAdF28c38c9551e143Bd52d7c7c5d0A99A8100cfb
   - 0x587f5ed7 (accumulatedFees())
   - 0x70a08231 (balanceOf(address))
   - 0x3ba0b9a9 (exchangeRate())
@@ -73,7 +73,7 @@ Adding 16 functions from 0xA07a94A0c7E9e30270Fd2b5837B6FE705c3f8e6b
   - 0x01e1d114 (totalAssets())
   - 0x3a98ef39 (totalShares())
   - 0x18160ddd (totalSupply())
-Adding 12 functions from 0x1D5fB48F019b6fD9bB65cF236660D61E97Db5CA2
+Adding 12 functions from 0x772E987b5a81d35c4E978B061F112dDC1B0F6BF8
   - 0x062776bf (collectAccumulatedFees())
   - 0x4e1aa9ef (performDailyUpdate())
   - 0xa42dce80 (setFeeCollector(address))
@@ -88,22 +88,22 @@ Adding 12 functions from 0x1D5fB48F019b6fD9bB65cF236660D61E97Db5CA2
   - 0x44240440 (updateWstETHBalance(address,uint256))
 6. Executing diamond cut...
 Adding 6 facets to diamond...
-Transaction hash: 0x24e9a61b3de19a582fcf9b34293d655eb4eeee3b3a0ccaafcbe8309574f102e6
-Diamond cut completed in block 3850575
+Transaction hash: 0x3fcf179a747a3467649ac88a2b8b9fe7049fc9f1565b96d0a0915dd0d331d9b2
+Diamond cut completed in block 3876323
 7. Verifying deployment...
 
 Registered facets:
-- Address: 0x1226c348934DD01b8Df90fA9463878793F385d97 | Selectors: 1
-- Address: 0x5Bd1d728225B2784caEE7616C9624647509ECdAd | Selectors: 4
-- Address: 0xF1B514F145C818E6B1a5FfcB338A46a7Dc1B4d8e | Selectors: 3
-- Address: 0xfdAe3bDae51e9B88a116D247C635D274A2e0f5d6 | Selectors: 9
-- Address: 0x5329c166F4ce1108552Fb175e48af343a68C48bf | Selectors: 10
-- Address: 0xA07a94A0c7E9e30270Fd2b5837B6FE705c3f8e6b | Selectors: 16
-- Address: 0x1D5fB48F019b6fD9bB65cF236660D61E97Db5CA2 | Selectors: 12
+- Address: 0x862463Db8f8c5756273623149CB0e50Cc684AF10 | Selectors: 1
+- Address: 0xb08eeE23E6D0336074f1E872A7b4ef7Dfbc22799 | Selectors: 4
+- Address: 0xF3b0B6864adf6328766DE44415B4BD15e4A8d238 | Selectors: 3
+- Address: 0xd97D66F55eEA05D1c83A8F91DcBaf3383B1C9D09 | Selectors: 9
+- Address: 0x99849830ef80807843784a50E9641Ba0b8B0815c | Selectors: 10
+- Address: 0xAdF28c38c9551e143Bd52d7c7c5d0A99A8100cfb | Selectors: 16
+- Address: 0x772E987b5a81d35c4E978B061F112dDC1B0F6BF8 | Selectors: 12
 
 Diamond owner: 0x9aD95Ef94D945B039eD5E8059603119b61271486
 
 Vault initialized. Total assets: 0
 
 Deployment complete!
-Diamond address (main contract): 0x906E74b5b28192AEfC754AFE012F2B756090E6A4
+Diamond address (main contract): 0x801215e865067072c853AD8c10a9ec9EB2BAd90A

@@ -37,14 +37,12 @@ interface IUSDC is IERC20 {
 interface ISwapContract {
     function swapExactUSDCForETH(
         uint amountIn,
-        uint amountOutMin,
-        address to,
-        uint deadline
+        address to
     ) external returns (uint amountOut);
 
     function getETHAmountOut(
         uint usdcAmountIn
-    ) external view returns (uint ethAmountOut);
+    ) external pure returns (uint ethAmountOut);
 }
 
 interface IReceiver {
@@ -139,12 +137,6 @@ contract DepositFacet is Modifiers {
         // Calculate staking portion (40%)
         uint256 amountToStake = (assets * DiamondStorage.STAKED_PORTION) / 100;
 
-        // Get expected ETH with 1% slippage tolerance
-        uint256 expectedEth = ISwapContract(ds.swapContract).getETHAmountOut(
-            amountToStake
-        );
-        uint256 minExpectedEth = (expectedEth * 99) / 100;
-
         // Update state
         ds.userDeposits[receiver] += assets;
         ds.balances[receiver] += shares;
@@ -161,16 +153,10 @@ contract DepositFacet is Modifiers {
 
         // Automatically initiate staking for 40%
         if (amountToStake > 0) {
-            safeTransferAndSwap(minExpectedEth, receiver, amountToStake);
+            safeTransferAndSwap(receiver, amountToStake);
         }
 
         emit Deposit(msg.sender, receiver, assets, shares);
-        emit StakeInitiated(
-            receiver,
-            amountToStake,
-            block.timestamp + DiamondStorage.LOCK_PERIOD
-        );
-
         return shares;
     }
 
@@ -209,7 +195,6 @@ contract DepositFacet is Modifiers {
     }
 
     function safeTransferAndSwap(
-        uint256 amountOutMin,
         address beneficiary,
         uint256 amountToStake
     ) public nonReentrantVault returns (uint256) {
@@ -227,43 +212,100 @@ contract DepositFacet is Modifiers {
             abi.encodePacked(block.timestamp, beneficiary, amountToStake)
         );
 
-        ds.totalStakedValue += amountToStake;
-        ds.stakedPortions[beneficiary] += amountToStake;
+        // Create batch entry before updating state
+        ds.stakeBatches[batchId].push(beneficiary);
 
         // Execute swap for staking
         IUSDC usdc = IUSDC(ds.ASSET_TOKEN_ADDRESS);
         bool success = usdc.approve(ds.swapContract, amountToStake);
         if (!success) revert USDCApprovalFailed();
 
-        // Calculate deadline (5 minutes from now)
-        uint256 deadline = block.timestamp + 300;
+        // Update state - will be reverted if swap fails
+        ds.totalStakedValue += amountToStake;
+        ds.stakedPortions[beneficiary] += amountToStake;
 
-        // Call the swap function with receiver contract as the ETH recipient
-        uint256 ethReceived = ISwapContract(ds.swapContract)
-            .swapExactUSDCForETH(
+        uint256 ethReceived;
+        try
+            ISwapContract(ds.swapContract).swapExactUSDCForETH(
                 amountToStake,
-                amountOutMin,
-                ds.receiverContract, // Send ETH directly to receiver
-                deadline
-            );
+                ds.receiverContract // Send ETH directly to receiver
+            )
+        returns (uint256 receivedEth) {
+            if (receivedEth == 0) revert NoETHReceived();
+            ethReceived = receivedEth;
+            emit DebugLog("ETH received from swap", ethReceived);
+        } catch Error(string memory reason) {
+            // Revert state changes
+            ds.totalStakedValue -= amountToStake;
+            ds.stakedPortions[beneficiary] -= amountToStake;
 
-        if (ethReceived == 0) revert NoETHReceived();
+            // Reset approval
+            usdc.approve(ds.swapContract, 0);
+
+            emit DepositFailed(beneficiary, amountToStake, reason);
+            revert(string(abi.encodePacked("Swap failed: ", reason)));
+        } catch (bytes memory) {
+            // Revert state changes
+            ds.totalStakedValue -= amountToStake;
+            ds.stakedPortions[beneficiary] -= amountToStake;
+
+            // Reset approval
+            usdc.approve(ds.swapContract, 0);
+
+            emit DepositFailed(
+                beneficiary,
+                amountToStake,
+                "Low-level swap error"
+            );
+            revert("Swap failed: unexpected error");
+        }
 
         // Store the amount of ETH being sent for this user
         ds.pendingEthStakes[beneficiary] = ethReceived;
 
-        // Add user to current batch
-        ds.stakeBatches[batchId].push(beneficiary);
-        emit DebugLog("ETH received from swap", ethReceived);
-
         if (ds.processedBatches[batchId]) revert BatchAlreadyProcessed();
-        // Call receiver with batch ID - no need to send ETH as it's already sent by the swap
-        uint256 wstETHReceived = IReceiver(ds.receiverContract)
-            .batchStakeWithLido{value: 0}(batchId, ethReceived);
 
+        // Call receiver with batch ID - no need to send ETH as it's already sent by the swap
+        uint256 wstETHReceived;
+        try
+            IReceiver(ds.receiverContract).batchStakeWithLido{value: 0}(
+                batchId,
+                ethReceived
+            )
+        returns (uint256 receivedWstETH) {
+            wstETHReceived = receivedWstETH;
+        } catch Error(string memory reason) {
+            // Revert state changes
+            ds.totalStakedValue -= amountToStake;
+            ds.stakedPortions[beneficiary] -= amountToStake;
+            ds.pendingEthStakes[beneficiary] = 0;
+
+            // Reset approval
+            usdc.approve(ds.swapContract, 0);
+
+            emit DepositFailed(beneficiary, amountToStake, reason);
+            revert(string(abi.encodePacked("Staking failed: ", reason)));
+        } catch (bytes memory) {
+            // Revert state changes
+            ds.totalStakedValue -= amountToStake;
+            ds.stakedPortions[beneficiary] -= amountToStake;
+            ds.pendingEthStakes[beneficiary] = 0;
+
+            // Reset approval
+            usdc.approve(ds.swapContract, 0);
+
+            emit DepositFailed(
+                beneficiary,
+                amountToStake,
+                "Low-level staking error"
+            );
+            revert("Staking failed: unexpected error");
+        }
+
+        // Mark batch as processed
         ds.processedBatches[batchId] = true;
 
-        // Calculate user's share
+        // Calculate user's share and update state
         uint256 userShare = wstETHReceived;
         ds.userWstETHBalance[beneficiary] += userShare;
 
@@ -278,6 +320,8 @@ contract DepositFacet is Modifiers {
 
         // Clear pending stake
         ds.pendingEthStakes[beneficiary] = 0;
+
+        // Emit events
         emit DebugLog("wstETH received", wstETHReceived);
         emit SwapInitiated(
             beneficiary,

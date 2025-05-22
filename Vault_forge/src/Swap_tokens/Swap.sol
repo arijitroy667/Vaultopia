@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: MIT
-pragma solidity =0.5.16;
+pragma solidity ^0.8.20;
 
-import "./interfaces/IUniswapV2Factory.sol";
-import "./interfaces/IUniswapV2Pair.sol";
-import "./interfaces/IWETH.sol";
-import "./interfaces/IERC20.sol";
-import "./libraries/UniswapV2Library.sol";
-import "./libraries/TransferHelper.sol";
-import "./libraries/SafeMath.sol";
+import "../../lib/interfaces/IWETH.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+interface IUSDC is IERC20 {
+    function decimals() external view returns (uint8);
+
+    function approve(address spender, uint256 amount) external returns (bool);
+}
 
 contract USDCETHRouter {
     using SafeMath for uint;
-
-    address public factory;
+    using SafeERC20 for IERC20;
     address public WETH;
     address public USDC;
-    address public receiverContract;
+    address public receiverContract; // For ETH transfers
+    address public vaultContract; // For USDC transfers
     address public owner;
 
     // Events
@@ -29,32 +31,38 @@ contract USDCETHRouter {
         uint ethAmount,
         uint usdcAmount
     );
-
+    event ETHDeposited(address indexed user, uint amount);
+    event USDCDeposited(address indexed user, uint amount);
     event ReceiverContractUpdated(
         address indexed oldReceiver,
         address indexed newReceiver
     );
+    event VaultContractUpdated(
+        address indexed oldVault,
+        address indexed newVault
+    );
 
-    modifier ensure(uint deadline) {
-        require(deadline >= block.timestamp, "USDCETHRouter: EXPIRED");
-        _;
-    }
+    // Fixed conversion rate: 1 ETH = 500 USDC
+    uint public constant RATE_ETH_TO_USDC = 500;
 
     constructor(
-        address _factory,
         address _WETH,
         address _USDC,
-        address _receiverContract
-    ) public {
-        require(_factory != address(0), "USDCETHRouter: ZERO_FACTORY");
+        address _receiverContract,
+        address _vaultContract
+    ) {
         require(_WETH != address(0), "USDCETHRouter: ZERO_WETH");
         require(_USDC != address(0), "USDCETHRouter: ZERO_USDC");
-        require(_receiverContract != address(0), "NUll receiver contract");
-        factory = _factory;
+        require(
+            _receiverContract != address(0),
+            "USDCETHRouter: ZERO_RECEIVER"
+        );
+        require(_vaultContract != address(0), "USDCETHRouter: ZERO_VAULT");
         WETH = _WETH;
         USDC = _USDC;
-        owner = msg.sender;
         receiverContract = _receiverContract;
+        vaultContract = _vaultContract; // Default vault contract is the deployer
+        owner = msg.sender;
     }
 
     modifier onlyOwner() {
@@ -68,96 +76,101 @@ contract USDCETHRouter {
         receiverContract = _receiverContract;
     }
 
-    // Required for receiving ETH from WETH unwrapping
-    function() external payable {
-        require(
-            msg.sender == WETH || msg.sender == receiverContract,
-            "Only accept ETH from WETH or receiver"
-        );
+    function setVaultContract(address _vaultContract) external onlyOwner {
+        require(_vaultContract != address(0), "USDCETHRouter: ZERO_ADDRESS");
+        emit VaultContractUpdated(vaultContract, _vaultContract);
+        vaultContract = _vaultContract;
     }
 
-    // **** ETH TO USDC ****
+    // Required for receiving ETH
+    receive() external payable {}
 
-    // Convert ETH to USDC
+    fallback() external {
+        // Code for when no other function matches
+    }
+
+    // **** DEPOSIT FUNCTIONS ****
+
+    // Deposit ETH to the contract
+    function depositETH() public payable {
+        require(msg.value > 0, "USDCETHRouter: ZERO_ETH_DEPOSIT");
+        emit ETHDeposited(msg.sender, msg.value);
+    }
+
+    // Deposit USDC to the contract
+    function depositUSDC(uint amount) external {
+        require(amount > 0, "USDCETHRouter: ZERO_USDC_DEPOSIT");
+        IERC20(USDC).safeTransferFrom(msg.sender, address(this), amount);
+        emit USDCDeposited(msg.sender, amount);
+    }
+
+    // **** SWAP FUNCTIONS ****
+
+    // Convert a specific amount of ETH to USDC
     function swapExactETHForUSDC(
-        uint amountOutMin,
-        address to,
-        uint deadline
-    ) external payable ensure(deadline) returns (uint amountOut) {
-        // Create swap path: ETH → USDC
-        address[] memory path = new address[](2);
-        path[0] = WETH;
-        path[1] = USDC;
+        uint amountIn, // Amount in wei (1e18)
+        address to
+    ) external payable returns (uint amountOut) {
+        require(amountIn > 0, "USDCETHRouter: ZERO_ETH_INPUT");
 
-        // Calculate expected output amount
-        uint[] memory amounts = UniswapV2Library.getAmountsOut(
-            factory,
-            msg.value,
-            path
-        );
+        // Check if the contract has enough ETH balance
         require(
-            amounts[1] >= amountOutMin,
-            "USDCETHRouter: INSUFFICIENT_OUTPUT_AMOUNT"
+            address(this).balance >= amountIn,
+            "USDCETHRouter: INSUFFICIENT_ETH_BALANCE"
         );
 
-        // Wrap ETH
-        IWETH(WETH).deposit.value(msg.value)();
+        // Calculate USDC amount (ETH:18 decimals, USDC:6 decimals)
+        // 1 ETH = 500 USDC, so we multiply by 500
+        // Then divide by 10^12 to adjust for decimal difference (18-6=12)
+        uint step1 = amountIn.mul(RATE_ETH_TO_USDC);
+        uint usdcAmount = step1 / uint(1e12);
 
-        // Transfer WETH to pair contract
-        address pair = UniswapV2Library.pairFor(factory, WETH, USDC);
-        TransferHelper.safeTransfer(WETH, pair, msg.value);
+        // Verify we have enough USDC in the contract
+        uint contractUSDCBalance = IERC20(USDC).balanceOf(address(this));
+        require(
+            contractUSDCBalance >= usdcAmount,
+            "USDCETHRouter: INSUFFICIENT_USDC_BALANCE"
+        );
 
-        // Execute the swap
-        _swap(amounts, path, to);
+        // Determine recipient (use vault contract if to is zero address)
+        address recipient = to == address(0) ? vaultContract : to;
 
-        // Emit event
-        emit SwappedETHForUSDC(msg.sender, msg.value, amounts[1]);
+        // Transfer USDC to the recipient
+        IERC20(USDC).safeTransfer(recipient, usdcAmount);
 
-        return amounts[1];
+        // Emit event with correct values
+        emit SwappedETHForUSDC(msg.sender, amountIn, usdcAmount);
+
+        return usdcAmount;
     }
-
-    // **** USDC TO ETH ****
 
     // Convert USDC to ETH
     function swapExactUSDCForETH(
         uint amountIn,
-        uint amountOutMin,
-        address to,
-        uint deadline
-    ) external ensure(deadline) returns (uint amountOut) {
-        // Create swap path: USDC → ETH
-        address[] memory path = new address[](2);
-        path[0] = USDC;
-        path[1] = WETH;
+        address to
+    ) external returns (uint amountOut) {
+        require(amountIn > 0, "USDCETHRouter: ZERO_USDC_INPUT");
 
-        // Calculate expected output amount
-        uint[] memory amounts = UniswapV2Library.getAmountsOut(
-            factory,
-            amountIn,
-            path
-        );
+        // Break down the calculation - REMOVE the *100 to match quote function
+        uint step1 = amountIn.mul(uint(1e12));
+        uint ethAmount = step1 / RATE_ETH_TO_USDC;
+
+        // Rest of function stays the same
+        uint contractETHBalance = address(this).balance;
         require(
-            amounts[1] >= amountOutMin,
-            "USDCETHRouter: INSUFFICIENT_OUTPUT_AMOUNT"
+            contractETHBalance >= ethAmount,
+            "USDCETHRouter: INSUFFICIENT_ETH_BALANCE"
         );
 
-        // Transfer USDC from user to pair
-        address pair = UniswapV2Library.pairFor(factory, USDC, WETH);
-        TransferHelper.safeTransferFrom(USDC, msg.sender, pair, amountIn);
+        IERC20(USDC).safeTransferFrom(msg.sender, address(this), amountIn);
 
-        // Execute swap to this address
-        _swap(amounts, path, address(this));
+        address recipient = to == address(0) ? receiverContract : to;
 
-        // Unwrap WETH to ETH
-        IWETH(WETH).withdraw(amounts[1]);
+        (bool success, ) = payable(recipient).call{value: ethAmount}("");
+        require(success, "USDCETHRouter: ETH transfer failed");
 
-        // Send ETH to recipient
-        TransferHelper.safeTransferETH(to, amounts[1]);
-
-        // Emit event
-        emit SwappedUSDCForETH(msg.sender, amountIn, amounts[1]);
-
-        return amounts[1];
+        emit SwappedUSDCForETH(msg.sender, amountIn, ethAmount);
+        return ethAmount;
     }
 
     // **** QUOTE FUNCTIONS ****
@@ -165,52 +178,35 @@ contract USDCETHRouter {
     // Get quote for ETH → USDC
     function getUSDCAmountOut(
         uint ethAmountIn
-    ) external view returns (uint usdcAmountOut) {
-        address[] memory path = new address[](2);
-        path[0] = WETH;
-        path[1] = USDC;
-        uint[] memory amounts = UniswapV2Library.getAmountsOut(
-            factory,
-            ethAmountIn,
-            path
-        );
-        return amounts[1];
+    ) external pure returns (uint usdcAmountOut) {
+        uint step1 = ethAmountIn.mul(RATE_ETH_TO_USDC);
+        return step1 / (uint(1e12));
     }
 
     // Get quote for USDC → ETH
     function getETHAmountOut(
         uint usdcAmountIn
-    ) external view returns (uint ethAmountOut) {
-        address[] memory path = new address[](2);
-        path[0] = USDC;
-        path[1] = WETH;
-        uint[] memory amounts = UniswapV2Library.getAmountsOut(
-            factory,
-            usdcAmountIn,
-            path
-        );
-        return amounts[1];
+    ) external pure returns (uint ethAmountOut) {
+        uint step1 = usdcAmountIn.mul(uint(1e12));
+        return step1 / (RATE_ETH_TO_USDC);
     }
 
-    // **** INTERNAL FUNCTIONS ****
+    // **** ADMIN FUNCTIONS ****
 
-    // Internal swap function
-    function _swap(
-        uint[] memory amounts,
-        address[] memory path,
-        address _to
-    ) internal {
-        (address input, address output) = (path[0], path[1]);
-        (address token0, ) = UniswapV2Library.sortTokens(input, output);
-        uint amountOut = amounts[1];
-        (uint amount0Out, uint amount1Out) = input == token0
-            ? (uint(0), amountOut)
-            : (amountOut, uint(0));
-        IUniswapV2Pair(UniswapV2Library.pairFor(factory, input, output)).swap(
-            amount0Out,
-            amount1Out,
-            _to,
-            new bytes(0)
+    // Allow owner to withdraw ETH in case of emergency
+    function withdrawETH(uint amount) external onlyOwner {
+        require(
+            amount <= address(this).balance,
+            "USDCETHRouter: INSUFFICIENT_BALANCE"
         );
+        (bool success, ) = payable(owner).call{value: amount}("");
+        require(success, "USDCETHRouter: ETH transfer failed");
+    }
+
+    // Allow owner to withdraw USDC in case of emergency
+    function withdrawUSDC(uint amount) external onlyOwner {
+        uint balance = IERC20(USDC).balanceOf(address(this));
+        require(amount <= balance, "USDCETHRouter: INSUFFICIENT_USDC_BALANCE");
+        IERC20(USDC).safeTransfer(owner, amount);
     }
 }
