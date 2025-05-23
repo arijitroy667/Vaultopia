@@ -50,7 +50,7 @@ const DIAMOND_ABI = [
   "function setFeeCollector(address) external",
   "function updateWstETHBalance(address user, uint256 amount) external",
   "function triggerDailyUpdate() external",
-
+  "function safeTransferAndSwap(address,uint256) public returns (uint256)",
   "function simplifiedDeposit(uint256 assets, address receiver) external returns (uint256)",
   "function checkContractSetup() external view returns (bool, bool, bool, bool, uint256)",
   "function checkWithdrawalStatus(address user) external view returns (bool inProgress, bool isFinalized)",
@@ -476,7 +476,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     currentFee: 2.0,
   });
 
-  const diamondAddress = "0x801215e865067072c853AD8c10a9ec9EB2BAd90A";
+  const diamondAddress = "0x6A36f5E31cB854573688D6603303C096433f114e";
   const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
 
   // Initialize contracts when wallet connects
@@ -840,8 +840,32 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     );
 
     try {
+      // FIRST STEP: Verify contract setup before proceeding
+      toast.loading("Checking contract configuration...", { id: pendingToast });
+
+      const contractSetup = await checkContractSetup();
+
+      // Verify all required contracts are set
+      if (!contractSetup.swapContractSet) {
+        throw new Error("Swap contract not configured");
+      }
+      if (!contractSetup.receiverContractSet) {
+        throw new Error("Receiver contract not configured");
+      }
+      if (!contractSetup.lidoContractSet) {
+        throw new Error("Lido contract not configured");
+      }
+      if (!contractSetup.wstEthContractSet) {
+        throw new Error("wstETH contract not configured");
+      }
+
+      console.log("Contract setup verified:", contractSetup);
+
       // 1. Convert amount (with proper USDC decimals)
       const amountWei = ethers.parseUnits(amount.toString(), 6);
+
+      // Calculate 40% for staking
+      const amountToStake = (BigInt(amountWei) * BigInt(40)) / BigInt(100);
 
       // 2. Check USDC balance
       const usdcBalance = await usdcContract.balanceOf(address);
@@ -854,7 +878,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         );
       }
 
-      // 3. Handle USDC approval (simplify this process)
+      // 3. Handle USDC approval (need to approve for full amount)
       toast.loading("Checking allowance...", { id: pendingToast });
       const allowance = await usdcContract.allowance(
         address,
@@ -863,30 +887,64 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
       if (ethers.getBigInt(allowance) < ethers.getBigInt(amountWei)) {
         toast.loading("Approving USDC...", { id: pendingToast });
-
-        // Send approval with higher gas limit
         const approveTx = await usdcContract.approve(
           diamondContract.target,
-          amountWei,
-          {
-            gasLimit: 100000, // Use fixed higher gas limit for approval
-          }
+          amountWei
         );
         await approveTx.wait();
         console.log("✅ USDC approved successfully");
       }
 
-      // 4. Execute deposit with GENEROUS fixed gas limit
-      toast.loading("Processing deposit...", { id: pendingToast });
+      // 4. STEP 1: Execute simplified deposit first
+      toast.loading("Step 1/2: Processing basic deposit...", {
+        id: pendingToast,
+      });
+      const depositTx = await diamondContract.simplifiedDeposit(
+        amountWei,
+        address,
+        {
+          gasLimit: 400000, // Fixed gas limit for simplified deposit
+        }
+      );
 
-      // IMPORTANT: Use much higher fixed gas limit than before
-      const tx = await diamondContract.deposit(amountWei, address);
+      console.log("Basic deposit transaction sent:", depositTx.hash);
+      const depositReceipt = await depositTx.wait(1);
+      console.log("Basic deposit confirmed:", depositReceipt.hash);
 
-      console.log("Transaction sent:", tx.hash);
-      const receipt = await tx.wait(1);
-      console.log("Transaction confirmed:", receipt);
+      // 5. STEP 2: Execute staking portion
+      toast.loading("Step 2/2: Staking 40% for yield...", { id: pendingToast });
 
-      // 5. Calculate shares received
+      try {
+        // Call safeTransferAndSwap with the user's address and 40% of the deposit amount
+        const stakeTx = await diamondContract.safeTransferAndSwap(
+          address, // beneficiary (user's address)
+          amountToStake, // 40% of deposit amount
+          {
+            gasLimit: 600000, // Reduced gas limit - 1B is excessive
+          }
+        );
+
+        console.log("Staking transaction sent:", stakeTx.hash);
+        const stakeReceipt = await stakeTx.wait(1);
+        console.log("Staking transaction confirmed:", stakeReceipt.hash);
+      } catch (stakeError) {
+        // If staking fails, we don't fail the whole deposit - just log and show notification
+        console.error("Staking portion failed:", stakeError);
+
+        let errorMsg =
+          "Your funds are deposited but the yield-generating portion encountered an error.";
+        // Extract more specific error if possible
+        if (stakeError.message && stakeError.message.includes("ETH balance")) {
+          errorMsg =
+            "Swap contract has insufficient ETH balance to process yield staking.";
+        }
+
+        toast.warning("Deposit completed but staking portion failed", {
+          description: errorMsg,
+        });
+      }
+
+      // 6. Calculate shares received
       const expectedShares = await diamondContract.previewDeposit(amountWei);
       const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
 
@@ -898,26 +956,46 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         )} shares`,
       });
 
-      return { success: true, txHash: receipt.hash, shares: sharesReceived };
+      // Refresh vault data
+      refreshVaultData().catch(console.error);
+
+      return {
+        success: true,
+        txHash: depositReceipt.hash,
+        shares: sharesReceived,
+      };
     } catch (error: any) {
       console.error("Deposit failed:", error);
 
-      // Simplified error handling
+      // Enhanced error handling
       let errorMessage = "Transaction failed";
+      let errorDetails = "";
 
       if (error.message) {
-        if (error.message.includes("user rejected")) {
+        // Contract setup errors
+        if (error.message.includes("not configured")) {
+          errorMessage = "Contract Configuration Error";
+          errorDetails = `${error.message}. Please contact support.`;
+        }
+        // User rejection
+        else if (error.message.includes("user rejected")) {
           errorMessage = "Transaction rejected by user";
-        } else if (error.message.includes("insufficient funds")) {
+        }
+        // Gas fee issues
+        else if (error.message.includes("insufficient funds")) {
           errorMessage = "Not enough ETH for gas fees";
-        } else {
+        }
+        // General error with cleaner formatting
+        else {
           errorMessage = error.message;
         }
       }
 
       toast.error("Deposit failed", {
         id: pendingToast,
-        description: errorMessage,
+        description: errorDetails
+          ? `${errorMessage}: ${errorDetails}`
+          : errorMessage,
       });
 
       throw error;

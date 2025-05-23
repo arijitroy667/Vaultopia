@@ -204,8 +204,6 @@ contract DepositFacet is Modifiers {
         if (ds.lidoContract == address(0)) revert LidoContractNotSet();
         if (ds.wstETHAddress == address(0)) revert WstETHContractNotSet();
         if (ds.swapContract == address(0)) revert SwapContractNotSet();
-        if (msg.sender != ds.owner && msg.sender != address(this))
-            revert UnauthorizedCaller();
         if (amountToStake == 0) revert AmountTooSmall();
 
         bytes32 batchId = keccak256(
