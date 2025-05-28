@@ -1,15 +1,36 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { useVault } from "@/context/vault-context"
-import { useWallet } from "@/context/wallet-context"
-import { toast } from "sonner"
-import { ArrowRight, Info, AlertCircle, Clock } from "lucide-react"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { ethers } from "ethers"
+import { useState, useEffect } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { useVault } from "@/context/vault-context";
+import { useWallet } from "@/context/wallet-context";
+import { toast } from "sonner";
+import {
+  ArrowRight,
+  Info,
+  AlertCircle,
+  Clock,
+  CheckCircle,
+  HelpCircle,
+  LockIcon,
+} from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { ethers } from "ethers";
+import { Progress } from "@/components/ui/progress";
 
 const DIAMOND_ABI = [
   "function withdraw(uint256 assets, address receiver, address owner) external returns (uint256)",
@@ -17,23 +38,24 @@ const DIAMOND_ABI = [
   "function maxWithdraw(address owner) external view returns (uint256)",
   "function getWithdrawableAmount(address user) external view returns (uint256)",
   "function getLockedAmount(address user) external view returns (uint256)",
-  "function getUnlockTime(address user) external view returns (uint256[])"
+  "function getUnlockTime(address user) external view returns (uint256[])",
+  "function userDeposits(address user) external view returns (uint256)",
+  "function usedLiquidPortion(address user) external view returns (uint256)",
 ];
 
 export function WithdrawSection() {
-  const [amount, setAmount] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [withdrawableAmount, setWithdrawableAmount] = useState("0")
-  const [lockedAmount, setLockedAmount] = useState("0")
-  const [unlockTimes, setUnlockTimes] = useState<number[]>([])
-  const [isChecking, setIsChecking] = useState(true)
-  const { vaultData, userShares, refreshVaultData, withdraw } = useVault()
-  const { isConnected, address, provider } = useWallet()
-  const [isPending, setIsPending] = useState(false)
-
-  // Contract addresses from environment variables
+  const [amount, setAmount] = useState("");
+  const [withdrawableAmount, setWithdrawableAmount] = useState("0");
+  const [lockedAmount, setLockedAmount] = useState("0");
+  const [totalDeposits, setTotalDeposits] = useState("0");
+  const [usedLiquidPortion, setUsedLiquidPortion] = useState("0");
+  const [unlockTimes, setUnlockTimes] = useState<number[]>([]);
+  const [isChecking, setIsChecking] = useState(true);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const { vaultData, userShares, refreshVaultData, withdraw } = useVault();
+  const { isConnected, address, provider } = useWallet();
   const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
-  
+
   // Effect to fetch withdrawable amount when component mounts or address changes
   useEffect(() => {
     if (isConnected && address && provider && diamondAddress) {
@@ -41,30 +63,57 @@ export function WithdrawSection() {
     } else {
       setWithdrawableAmount("0");
       setLockedAmount("0");
+      setTotalDeposits("0");
+      setUsedLiquidPortion("0");
       setUnlockTimes([]);
       setIsChecking(false);
     }
   }, [isConnected, address, provider, userShares, diamondAddress]);
 
-  // Fetch withdrawable amount and locked amounts
   const fetchWithdrawableAmount = async () => {
     setIsChecking(true);
     try {
       const signer = await provider!.getSigner();
-      const diamondContract = new ethers.Contract(diamondAddress!, DIAMOND_ABI, signer);
+      const diamondContract = new ethers.Contract(
+        diamondAddress!,
+        DIAMOND_ABI,
+        signer
+      );
 
-      // Get withdrawable amount
-      const withdrawable = await diamondContract.getWithdrawableAmount(address);
-      setWithdrawableAmount(ethers.formatUnits(withdrawable, 6));
-      
-      // Get locked amount
-      const locked = await diamondContract.getLockedAmount(address);
+      // Get all relevant withdrawal data
+      const [
+        actualWithdrawable,
+        theoreticalWithdrawable,
+        locked,
+        deposits,
+        liquidUsed,
+      ] = await Promise.all([
+        diamondContract.maxWithdraw(address),
+        diamondContract.getWithdrawableAmount(address),
+        diamondContract.getLockedAmount(address),
+        diamondContract.userDeposits(address),
+        diamondContract.usedLiquidPortion(address),
+      ]);
+
+      // Set state with formatted values
+      setWithdrawableAmount(ethers.formatUnits(actualWithdrawable, 6));
       setLockedAmount(ethers.formatUnits(locked, 6));
-      
-      // Get unlock times if there are locked amounts
+      setTotalDeposits(ethers.formatUnits(deposits, 6));
+      setUsedLiquidPortion(ethers.formatUnits(liquidUsed, 6));
+
+      // Log for debugging
+      console.log({
+        actualWithdrawable: ethers.formatUnits(actualWithdrawable, 6),
+        theoreticalWithdrawable: ethers.formatUnits(theoreticalWithdrawable, 6),
+        locked: ethers.formatUnits(locked, 6),
+        totalDeposits: ethers.formatUnits(deposits, 6),
+        usedLiquidPortion: ethers.formatUnits(liquidUsed, 6),
+      });
+
+      // Get unlock times if there are locked funds
       if (ethers.getBigInt(locked) !== BigInt(0)) {
         const times = await diamondContract.getUnlockTime(address);
-        setUnlockTimes(times.map((t)=> Number(t)));
+        setUnlockTimes(times.map((t) => Number(t)));
       } else {
         setUnlockTimes([]);
       }
@@ -78,70 +127,70 @@ export function WithdrawSection() {
 
   const handleWithdraw = async () => {
     if (!amount || Number.parseFloat(amount) <= 0) return;
-    
+
     const withdrawAmount = Number.parseFloat(amount);
-    const maxWithdrawable = Number.parseFloat(withdrawableAmount);
-    
-    if (withdrawAmount > maxWithdrawable) {
+
+    // Check if amount is greater than withdrawable before sending transaction
+    if (withdrawAmount > parseFloat(withdrawableAmount)) {
       toast.error("Withdrawal limit exceeded", {
-        description: `Maximum withdrawable amount: ${maxWithdrawable.toFixed(2)} USDC`
+        description: `You can only withdraw up to ${parseFloat(
+          withdrawableAmount
+        ).toLocaleString()} USDC at this time.`,
       });
       return;
     }
 
-    setIsLoading(true);
-    setIsPending(true);
+    setIsWithdrawing(true);
     try {
-      // Call the withdraw function from vault context
       await withdraw(withdrawAmount);
-      
-      // Reset form and refresh data
       setAmount("");
-      
-      await fetchWithdrawableAmount();
-      await refreshVaultData();
-    
-      toast.success("Withdrawal successful", {
-        description: `You have withdrawn ${withdrawAmount.toFixed(2)} USDC`
-      });
-
-    } catch (error: any) {
+      await fetchWithdrawableAmount(); // Refresh after withdrawal
+    } catch (error) {
       console.error("Withdrawal failed:", error);
-      toast.error("Withdrawal failed", { 
-        description: error.message || "Transaction failed. Please try again." 
-      });
     } finally {
-      setIsLoading(false);
-      setIsPending(false);
+      setIsWithdrawing(false);
     }
   };
 
   // Format unlock times for display
   const getFormattedUnlockTime = () => {
     if (unlockTimes.length === 0) return null;
-    
+
     // Find the soonest unlock time
     const now = Math.floor(Date.now() / 1000);
-    const nextUnlock = unlockTimes
-      .filter(time => time > now)
-      .sort((a, b) => a - b)[0];
-    
-    if (!nextUnlock) return null;
-    
+    const futureUnlocks = unlockTimes.filter((time) => time > now);
+
+    if (futureUnlocks.length === 0) return null;
+
+    const nextUnlock = Math.min(...futureUnlocks);
     const unlockDate = new Date(nextUnlock * 1000);
     const remainingTime = nextUnlock - now;
     const days = Math.floor(remainingTime / 86400);
     const hours = Math.floor((remainingTime % 86400) / 3600);
-    
+
     return {
-      date: unlockDate.toLocaleString(),
-      remaining: `${days}d ${hours}h`
+      date: unlockDate.toLocaleDateString(),
+      time: unlockDate.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+      remaining: `${days}d ${hours}h`,
+      timestamp: nextUnlock,
     };
   };
 
   const unlockInfo = getFormattedUnlockTime();
   const hasLockedFunds = Number(lockedAmount) > 0;
-  
+  const totalDepositVal = parseFloat(totalDeposits);
+
+  // Calculate the liquid portion percentage used
+  const totalLiquidPortion = totalDepositVal * 0.6; // 60% of deposits
+  const usedLiquidVal = parseFloat(usedLiquidPortion);
+  const liquidPortionUsedPercentage =
+    totalLiquidPortion > 0
+      ? Math.min(100, (usedLiquidVal / totalLiquidPortion) * 100)
+      : 0;
+
   return (
     <Card>
       <CardHeader>
@@ -158,9 +207,30 @@ export function WithdrawSection() {
               >
                 Amount to Withdraw (USDC)
               </label>
-              <span className="text-xs text-muted-foreground">
-                Available: {isChecking ? "Loading..." : parseFloat(withdrawableAmount).toLocaleString()} USDC
-              </span>
+              <div className="flex items-center">
+                <span className="text-xs text-muted-foreground">
+                  Available:{" "}
+                  {isChecking
+                    ? "Loading..."
+                    : parseFloat(withdrawableAmount).toLocaleString()}{" "}
+                  USDC
+                </span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <HelpCircle className="h-3 w-3 ml-1 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-[280px]">
+                      <p>
+                        This is the exact amount you can withdraw right now. It
+                        includes your remaining liquid portion (60% of deposits,
+                        minus what you've already withdrawn) plus any matured
+                        deposits.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
             </div>
             <div className="flex space-x-2">
               <Input
@@ -169,13 +239,17 @@ export function WithdrawSection() {
                 placeholder="0.0"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                disabled={isLoading || isChecking}
+                disabled={isChecking || isWithdrawing}
               />
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setAmount(withdrawableAmount)}
-                disabled={isLoading || isChecking || parseFloat(withdrawableAmount) <= 0}
+                disabled={
+                  isChecking ||
+                  isWithdrawing ||
+                  parseFloat(withdrawableAmount) <= 0
+                }
               >
                 Max
               </Button>
@@ -198,24 +272,79 @@ export function WithdrawSection() {
                 </TooltipProvider>
               </div>
               <span className="font-medium">
-                {amount ? (Number.parseFloat(amount) / vaultData.exchangeRate).toFixed(6) : "0.000000"}
+                {amount && Number.parseFloat(amount) > 0
+                  ? (
+                      Number.parseFloat(amount) / vaultData.exchangeRate
+                    ).toFixed(6)
+                  : "0.000000"}
               </span>
             </div>
             <div className="mt-2 flex items-center justify-between text-sm">
               <span>Exchange Rate</span>
-              <span className="font-medium">1 Share = ${vaultData.exchangeRate}</span>
+              <span className="font-medium">
+                1 Share = ${vaultData.exchangeRate.toFixed(4)}
+              </span>
             </div>
           </div>
 
+          {/* Liquid Portion Usage Tracker */}
+          {totalDepositVal > 0 && (
+            <div className="rounded-lg border p-3 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <div className="flex items-center">
+                  <span className="font-medium">
+                    Immediate Withdrawal Limit
+                  </span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3 w-3 ml-1 text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-[280px]">
+                        <p>
+                          You can withdraw up to 60% of your deposits
+                          immediately. Once used, you'll need to wait for the
+                          30-day lock period before withdrawing more.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <span className="text-sm">
+                  {usedLiquidVal.toFixed(2)} / {totalLiquidPortion.toFixed(2)}{" "}
+                  USDC used
+                </span>
+              </div>
+              <Progress value={liquidPortionUsedPercentage} className="h-2" />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>0%</span>
+                <span
+                  className={
+                    liquidPortionUsedPercentage >= 100
+                      ? "text-red-500 font-medium"
+                      : ""
+                  }
+                >
+                  {Math.min(100, liquidPortionUsedPercentage).toFixed(0)}%
+                </span>
+                <span>100%</span>
+              </div>
+            </div>
+          )}
+
           {hasLockedFunds && (
             <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-3 text-xs flex items-start gap-2 text-amber-800 dark:text-amber-400">
-              <Clock className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <LockIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <div>
                 <p className="font-medium">Locked Funds</p>
                 <p className="mt-1">
                   You have {parseFloat(lockedAmount).toFixed(2)} USDC locked.
                   {unlockInfo && (
-                    <> Next unlock: {unlockInfo.date} (in {unlockInfo.remaining})</>
+                    <>
+                      {" "}
+                      Next unlock: {unlockInfo.date} at {unlockInfo.time} (in{" "}
+                      {unlockInfo.remaining})
+                    </>
                   )}
                 </p>
               </div>
@@ -226,9 +355,35 @@ export function WithdrawSection() {
             <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
             <div>
               <p className="font-medium">Withdrawal Info</p>
-              <p className="mt-1">40% of your funds are staked via Lido. If your withdrawal includes staked assets, you'll need to wait for the <b className="text-yellow-500">Vaultopia standard unstaking period (30 days).</b></p>
+              <p className="mt-1">
+                60% of your funds are available for immediate withdrawal. The
+                remaining 40% are staked via Lido for the{" "}
+                <b className="text-yellow-500">standard 30-day lock period</b>.
+                Once you've used your immediate withdrawal portion, you'll need
+                to wait for deposits to mature.
+              </p>
             </div>
           </div>
+
+          {Number(withdrawableAmount) > 0 && (
+            <div className="rounded-lg bg-green-50 dark:bg-green-950/30 p-3 text-xs flex items-start gap-2 text-green-800 dark:text-green-400">
+              <CheckCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="font-medium">Available for Withdrawal</p>
+                <p className="mt-1">
+                  You can withdraw up to{" "}
+                  {parseFloat(withdrawableAmount).toFixed(2)} USDC immediately.
+                  {Number(lockedAmount) > 0 && (
+                    <>
+                      {" "}
+                      The remaining {parseFloat(lockedAmount).toFixed(2)} USDC
+                      will be available after the lock period.
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </CardContent>
       <CardFooter>
@@ -236,17 +391,22 @@ export function WithdrawSection() {
           className="w-full"
           onClick={handleWithdraw}
           disabled={
-            isLoading || 
             isChecking ||
-            isPending ||
-            !amount || 
-            Number.parseFloat(amount) <= 0 || 
-            !isConnected || 
+            isWithdrawing ||
+            !amount ||
+            Number.parseFloat(amount) <= 0 ||
+            !isConnected ||
             Number.parseFloat(amount) > parseFloat(withdrawableAmount)
           }
         >
-          {isLoading ? "Processing..." : isChecking ? "Loading..." : isPending? "Please wait..." : "Withdraw"}
-          {!isLoading && !isChecking && !isPending && <ArrowRight className="ml-2 h-4 w-4" />}
+          {isChecking
+            ? "Checking available funds..."
+            : isWithdrawing
+            ? "Processing withdrawal..."
+            : "Withdraw"}
+          {!isChecking && !isWithdrawing && (
+            <ArrowRight className="ml-2 h-4 w-4" />
+          )}
         </Button>
       </CardFooter>
     </Card>

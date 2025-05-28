@@ -86,16 +86,25 @@ contract WithdrawFacet is Modifiers {
         if (ds.emergencyShutdown) revert EmergencyShutdown();
         if (msg.sender != _owner) revert("Not authorized");
 
-        // Calculate withdrawable amount based on matured deposits only
-        uint256 totalBalance = convertToAssets(ds.balances[_owner]);
-        uint256 withdrawableAmount = calculateWithdrawableAmount(_owner);
+        // Calculate withdrawable amount
+        (
+            uint256 withdrawableAmount,
+            uint256 remainingLiquidPortion
+        ) = calculateWithdrawableAmount(_owner);
 
-        // Ensure user isn't withdrawing more than their mature deposits
+        // Ensure user isn't withdrawing more than allowed
         if (assets > withdrawableAmount)
             revert("Amount exceeds unlocked balance");
 
-        // Also verify they have sufficient total balance
-        if (assets > totalBalance) revert("Amount exceeds total balance");
+        // Calculate how much of this withdrawal comes from the liquid portion
+        uint256 fromLiquidPortion = assets <= remainingLiquidPortion
+            ? assets
+            : remainingLiquidPortion;
+
+        // Update used liquid portion tracking
+        if (fromLiquidPortion > 0) {
+            ds.usedLiquidPortion[_owner] += fromLiquidPortion;
+        }
 
         // Calculate shares to burn
         shares = previewWithdraw(assets);
@@ -415,11 +424,32 @@ contract WithdrawFacet is Modifiers {
     // Helper function to calculate withdrawable amount
     function calculateWithdrawableAmount(
         address user
-    ) internal view returns (uint256 withdrawable) {
+    )
+        internal
+        view
+        returns (uint256 withdrawable, uint256 remainingLiquidPortion)
+    {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
 
+        // Calculate total liquid portion (60% of total deposits)
+        uint256 totalLiquidPortion = (ds.userDeposits[user] *
+            DiamondStorage.LIQUID_PORTION) / 100;
+
+        // Calculate remaining liquid portion
+        remainingLiquidPortion = 0;
+        if (totalLiquidPortion > ds.usedLiquidPortion[user]) {
+            remainingLiquidPortion =
+                totalLiquidPortion -
+                ds.usedLiquidPortion[user];
+        }
+
+        // Start with remaining liquid portion
+        withdrawable = remainingLiquidPortion;
+
+        // Add matured deposits
         for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
             if (
+                !ds.userStakedDeposits[user][i].withdrawn &&
                 block.timestamp >=
                 ds.userStakedDeposits[user][i].timestamp +
                     DiamondStorage.LOCK_PERIOD
@@ -428,7 +458,11 @@ contract WithdrawFacet is Modifiers {
             }
         }
 
-        return withdrawable;
+        // Cap the withdrawable amount
+        uint256 totalBalance = convertToAssets(ds.balances[user]);
+        if (withdrawable > totalBalance) {
+            withdrawable = totalBalance;
+        }
     }
 
     // Helper function to get withdrawn amounts

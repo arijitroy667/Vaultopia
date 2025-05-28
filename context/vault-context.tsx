@@ -175,7 +175,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       try {
         console.log("Fetching Lido APY...");
         const response = await fetch(
-          "https://eth-api-holesky.testnet.fi/v1/protocol/steth/apr/sma"
+          "https://eth-api-hoodi.testnet.fi/v1/protocol/steth/apr/sma"
         );
         const data = await response.json();
 
@@ -476,7 +476,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     currentFee: 2.0,
   });
 
-  const diamondAddress = "0x48Eee1f1042CD0Dc6EED68A26566C8d787491F01";
+  const diamondAddress = "0x1515C4ceA0Ce5e2bd61838F73f3c2D640A6080Bf";
   const usdcAddress = "0x1904f0522FC7f10517175Bd0E546430f1CF0B9Fa";
 
   // Initialize contracts when wallet connects
@@ -576,23 +576,46 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Function to get vault data (TVL, shares, exchange rate)
   const getVaultData = useCallback(async (contract: ethers.Contract) => {
     const totalAssets = await contract.totalAssets();
     const totalShares = await contract.totalSupply();
 
-    // Calculate exchange rate (assets per share)
+    console.log("Raw totalAssets:", totalAssets.toString());
+    console.log("Raw totalShares:", totalShares.toString());
+
+    const formattedTotalShares = Number(ethers.formatUnits(totalShares, 18));
+    const formattedTotalAssets = Number(ethers.formatUnits(totalAssets, 6));
+
+    // CRITICAL FIX: Check for extremely small share values
     let exchangeRate = 1.0;
-    if (ethers.getBigInt(totalShares) > BigInt(0)) {
-      exchangeRate =
-        Number(ethers.formatUnits(totalAssets, 6)) /
-        Number(ethers.formatUnits(totalShares, 18));
+    let effectiveTotalShares = formattedTotalShares;
+    let shareAdjustmentRatio = 1.0; // Add this variable to track adjustment ratio
+
+    if (formattedTotalShares < 0.00001 && formattedTotalAssets > 0) {
+      // The share amount is too small relative to assets - use a fixed rate
+      console.warn(
+        "Extremely small share amount detected, using fixed exchange rate"
+      );
+      exchangeRate = 1.0;
+
+      // Calculate adjustment ratio when we adjust the display value
+      if (formattedTotalShares > 0) {
+        shareAdjustmentRatio = formattedTotalAssets / formattedTotalShares;
+      }
+      effectiveTotalShares = formattedTotalAssets; // Show equal shares to assets
+    } else if (formattedTotalShares > 0) {
+      // Normal calculation with safety cap
+      exchangeRate = Math.min(
+        formattedTotalAssets / formattedTotalShares,
+        1000
+      );
     }
 
     return {
-      tvl: Number(ethers.formatUnits(totalAssets, 6)),
-      totalShares: Number(ethers.formatUnits(totalShares, 18)),
+      tvl: formattedTotalAssets,
+      totalShares: effectiveTotalShares, // Use adjusted share amount for display
       exchangeRate: exchangeRate,
+      shareAdjustmentRatio: shareAdjustmentRatio, // Return the adjustment ratio
     };
   }, []);
 
@@ -639,11 +662,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           tvl: 0,
           totalShares: 0,
           exchangeRate: 1.0,
+          shareAdjustmentRatio: 1.0,
         };
         if (vaultInfoResult.status === "fulfilled") {
           vaultInfo = vaultInfoResult.value;
-        } else {
-          console.error("Failed to get vault data:", vaultInfoResult.reason);
+          console.log("Vault info processed:", vaultInfo);
         }
 
         // Process accumulated fees
@@ -670,9 +693,27 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           );
         }
 
-        // Process user shares
+        // Process user shares with adjustment ratio for consistency
         if (sharesResult.status === "fulfilled") {
-          setUserShares(sharesResult.value);
+          const rawUserShares = sharesResult.value;
+
+          // Apply the same adjustment to user shares as we did to total shares
+          // This ensures consistent display and calculations
+          if (vaultInfo.shareAdjustmentRatio > 1.0) {
+            const adjustedUserShares =
+              rawUserShares * vaultInfo.shareAdjustmentRatio;
+
+            console.log("Adjusting user shares:", {
+              rawUserShares,
+              adjustmentRatio: vaultInfo.shareAdjustmentRatio,
+              adjustedUserShares,
+            });
+
+            setUserShares(adjustedUserShares);
+          } else {
+            // No adjustment needed
+            setUserShares(rawUserShares);
+          }
         } else {
           console.warn("Failed to get user shares:", sharesResult.reason);
         }
@@ -718,69 +759,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       loadTransactionHistory,
     ]
   );
-
-  // Core function for approval and deposit with enhanced diagnostics
-  const approveAndDeposit = async (
-    diamondContract: ethers.Contract,
-    usdcContract: ethers.Contract,
-    amount: number,
-    userAddress: string
-  ) => {
-    // Convert amount to wei with 6 decimals (USDC)
-    const amountWei = ethers.parseUnits(amount.toString(), 6);
-    const formattedAddress = ethers.getAddress(userAddress);
-
-    // Basic validation
-    if (!diamondContract || !usdcContract) {
-      throw new Error("Contracts not initialized");
-    }
-
-    // Check USDC balance
-    const balance = await usdcContract.balanceOf(userAddress);
-    if (ethers.getBigInt(balance) < ethers.getBigInt(amountWei)) {
-      throw new Error("Insufficient USDC balance");
-    }
-
-    // Check and approve USDC allowance if needed
-    const allowance = await usdcContract.allowance(
-      userAddress,
-      diamondContract.target
-    );
-
-    if (ethers.getBigInt(allowance) < ethers.getBigInt(amountWei)) {
-      console.log("Approving USDC...");
-      const approveTx = await usdcContract.approve(
-        diamondContract.target,
-        amountWei
-      );
-      await approveTx.wait();
-    }
-
-    // Use a safe gas limit with buffer
-    const gasEstimate = await diamondContract.deposit
-      .estimateGas(amountWei, formattedAddress)
-      .catch(() => BigInt(800000)); // Fallback if estimation fails
-
-    const adjustedGasLimit = Math.min(
-      Number(gasEstimate) * 1.3, // 30% buffer
-      1_500_000 // Cap at 1.5M
-    );
-
-    // Execute deposit transaction
-    const tx = await diamondContract.deposit(amountWei, formattedAddress, {
-      gasLimit: BigInt(Math.floor(adjustedGasLimit)),
-    });
-
-    const receipt = await tx.wait(1);
-    const expectedShares = await diamondContract.previewDeposit(amountWei);
-    const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
-
-    return {
-      success: true,
-      txHash: receipt.hash,
-      shares: sharesReceived,
-    };
-  };
 
   const deposit = async (amount: number) => {
     // Basic validations
@@ -912,21 +890,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const queueLargeDeposit = async () => {
-    if (!diamondContract) return;
-    try {
-      const tx = await diamondContract.queueLargeDeposit();
-      await tx.wait();
-      toast.success("Large deposit queued", {
-        description:
-          "Your large deposit has been queued. You can deposit after the timelock period.",
-      });
-    } catch (error) {
-      console.error("Failed to queue large deposit:", error);
-      toast.error("Failed to queue deposit");
-    }
-  };
-
   // Withdraw function - simplify for now
   const withdraw = async (amount: number) => {
     if (!isConnected || !address) throw new Error("Wallet not connected");
@@ -938,17 +901,70 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
       // Convert amount to wei (USDC has 6 decimals)
       const amountWei = ethers.parseUnits(amount.toString(), 6);
-      const gasEstimate = await diamondContract.withdraw.estimateGas(
-        amountWei,
-        address,
-        address
-      );
-      const adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.2); // Add 20% buffer
 
-      // Check withdrawal limit
-      const withdrawable = await diamondContract.getWithdrawableAmount(address);
+      // Get both unlocked and max withdraw amount for better user feedback
+      const [withdrawable, withdrawableAmount, lockedAmount] =
+        await Promise.all([
+          diamondContract.maxWithdraw(address),
+          diamondContract.getWithdrawableAmount(address),
+          diamondContract.getLockedAmount(address),
+        ]);
+
+      // Log values for debugging
+      console.log({
+        requestedAmount: ethers.formatUnits(amountWei, 6),
+        maxWithdrawable: ethers.formatUnits(withdrawable, 6),
+        withdrawableAmount: ethers.formatUnits(withdrawableAmount, 6),
+        lockedAmount: ethers.formatUnits(lockedAmount, 6),
+      });
+
+      // Check if amount is within withdrawable limit
       if (ethers.getBigInt(withdrawable) < ethers.getBigInt(amountWei)) {
-        throw new Error("Amount exceeds withdrawable limit");
+        const maxAmount = ethers.formatUnits(withdrawable, 6);
+        throw new Error(
+          `Maximum withdrawable amount is ${parseFloat(maxAmount).toFixed(
+            2
+          )} USDC. You requested ${amount} USDC.${
+            ethers.getBigInt(lockedAmount) > BigInt(0)
+              ? ` You have ${ethers.formatUnits(
+                  lockedAmount,
+                  6
+                )} USDC still locked.`
+              : ""
+          }`
+        );
+      }
+
+      // Try to estimate gas with error handling
+      let adjustedGasLimit;
+      try {
+        const gasEstimate = await diamondContract.withdraw.estimateGas(
+          amountWei,
+          address,
+          address
+        );
+        adjustedGasLimit = Math.floor(Number(gasEstimate) * 1.2); // Add 20% buffer
+      } catch (error: any) {
+        console.error("Gas estimation failed:", error);
+
+        // Show specific message for the "Amount exceeds unlocked balance" error
+        if (
+          error.reason &&
+          error.reason.includes("Amount exceeds unlocked balance")
+        ) {
+          toast.dismiss(pendingToast);
+          toast.error("Withdrawal amount exceeds unlocked balance", {
+            description: `You have ${parseFloat(
+              ethers.formatUnits(withdrawable, 6)
+            ).toFixed(2)} USDC available for withdrawal now, and ${parseFloat(
+              ethers.formatUnits(lockedAmount, 6)
+            ).toFixed(2)} USDC still locked.`,
+          });
+          return;
+        }
+
+        // For other errors, use a generous gas limit as fallback
+        adjustedGasLimit = 300000;
       }
 
       // Calculate shares to be burned
@@ -989,6 +1005,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       const completedTx: Transaction = {
         ...pendingTx,
         status: "completed",
+        txHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
       };
       setTransactions((prev) => [
         completedTx,
@@ -1014,28 +1032,35 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           tx.status === "pending" &&
           tx.type === "withdraw" &&
           tx.amount === amount
-            ? { ...tx, status: "failed" }
+            ? { ...tx, status: "failed", error: error.message }
             : tx
         )
       );
 
-      // Show error toast
+      // Show error toast with improved messaging
       let errorMessage = "Unknown error occurred";
+      let errorDetails = "";
 
       if (error.message) {
         if (error.message.includes("Amount exceeds unlocked balance")) {
-          errorMessage =
-            "You're trying to withdraw locked funds. Check unlock times.";
+          errorMessage = "Cannot withdraw locked funds";
+          errorDetails =
+            "Some of your funds are still locked. Check the unlock times below.";
         } else if (error.message.includes("user rejected")) {
           errorMessage = "Transaction rejected by user";
         } else if (error.message.includes("insufficient funds")) {
           errorMessage = "Insufficient ETH for gas fees";
+        } else if (error.message.includes("Maximum withdrawable amount")) {
+          // This is our custom error from above
+          errorMessage = "Withdrawal limit exceeded";
+          errorDetails = error.message;
         } else {
-          errorMessage = error.message;
+          errorMessage = "Transaction failed";
+          errorDetails = error.message;
         }
       }
 
-      toast.error("Withdrawal failed", { description: errorMessage });
+      toast.error(errorMessage, { description: errorDetails });
     }
   };
 

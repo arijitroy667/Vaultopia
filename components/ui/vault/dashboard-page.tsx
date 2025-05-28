@@ -1,30 +1,51 @@
-"use client"
+"use client";
 
-import { useEffect, useRef, useState } from "react"
-import { motion } from "framer-motion"
-import { ArrowRight, Lock, Shield, TrendingUp, RefreshCw } from "lucide-react"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { WalletConnect } from "@/components/ui/wallet/wallet-connect"
-import { VaultStats } from "@/components/ui/vault/vault-stats"
-import { DepositSection } from "@/components/ui/vault/deposit-section"
-import { WithdrawSection } from "@/components/ui/vault/withdraw-section"
-import { TransactionHistory } from "@/components/ui/vault/transaction-history"
-import { AdminPanel } from "@/components/ui/vault/admin-panel"
-import { useWallet } from "@/context/wallet-context"
-import { useVault } from "@/context/vault-context"
-import { Button } from "@/components/ui/button"
+import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { ArrowRight, Lock, Shield, TrendingUp, RefreshCw } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { WalletConnect } from "@/components/ui/wallet/wallet-connect";
+import { VaultStats } from "@/components/ui/vault/vault-stats";
+import { DepositSection } from "@/components/ui/vault/deposit-section";
+import { WithdrawSection } from "@/components/ui/vault/withdraw-section";
+import { TransactionHistory } from "@/components/ui/vault/transaction-history";
+import { AdminPanel } from "@/components/ui/vault/admin-panel";
+import { useWallet } from "@/context/wallet-context";
+import { useVault } from "@/context/vault-context";
+import { Button } from "@/components/ui/button";
 
 export function DashboardPage() {
-  const [activeTab, setActiveTab] = useState("dashboard")
-  const { isConnected, isAdmin } = useWallet()
-  const { vaultData, refreshVaultData, isLoading: vaultLoading, fetchLidoAPY } = useVault()
-  const [localLoading, setLocalLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const { isConnected, isAdmin } = useWallet();
+  const {
+    vaultData,
+    refreshVaultData,
+    isLoading: vaultLoading,
+    fetchLidoAPY,
+  } = useVault();
+  const [localLoading, setLocalLoading] = useState(false);
   const showLoading = localLoading || vaultLoading;
+
   const formatCurrency = (value) => {
-    if (value === undefined || value === null || isNaN(value)) return "0.00";
-    return parseFloat(value.toFixed(2)).toLocaleString();
-  }
-  
+    // Enhanced debugging
+    console.log(`Formatting currency value: ${value}, type: ${typeof value}`);
+
+    if (value === undefined || value === null || isNaN(value)) {
+      console.log("Value is undefined, null, or NaN - returning 0.00");
+      return "0.00";
+    }
+
+    // Handle very small numbers
+    if (typeof value === "number" && value < 0.01 && value > 0) {
+      console.log("Very small value detected, using scientific notation");
+      return value.toExponential(2);
+    }
+
+    const formatted = parseFloat(value.toFixed(2)).toLocaleString();
+    console.log(`Formatted value: ${formatted}`);
+    return formatted;
+  };
+
   // Only do a light refresh of vault data (without transactions)
   // when the dashboard loads
   useEffect(() => {
@@ -33,57 +54,60 @@ export function DashboardPage() {
         setLocalLoading(true);
         try {
           // Execute these in parallel for faster loading
-          await Promise.all([
-            fetchLidoAPY(),
-            refreshVaultData()
-          ]);
+          await Promise.all([fetchLidoAPY(), refreshVaultData()]);
         } catch (error) {
           console.error("Error loading initial data:", error);
         } finally {
           setLocalLoading(false);
         }
       };
-      
+
       loadInitialData();
-      
+
       // Set up auto-refresh interval
       const refreshInterval = setInterval(() => {
         refreshVaultData();
         // Only refresh APY once per hour at most
-        const lastFetchTime = localStorage.getItem('lastApyFetchTime');
-        if (!lastFetchTime || (Date.now() - parseInt(lastFetchTime)) > 3600000) {
+        const lastFetchTime = localStorage.getItem("lastApyFetchTime");
+        if (!lastFetchTime || Date.now() - parseInt(lastFetchTime) > 3600000) {
           fetchLidoAPY().then(() => {
-            localStorage.setItem('lastApyFetchTime', Date.now().toString());
+            localStorage.setItem("lastApyFetchTime", Date.now().toString());
           });
         }
       }, 600000); // Refresh every 10 minutes
-      
+
       return () => clearInterval(refreshInterval);
     }
   }, [isConnected, refreshVaultData, fetchLidoAPY]);
 
   useEffect(() => {
     // Handle URL hash for direct tab access
-    const hash = window.location.hash.replace('#', '');
-    if (hash && ['dashboard', 'deposit', 'withdraw', 'history'].includes(hash)) {
+    const hash = window.location.hash.replace("#", "");
+    if (
+      hash &&
+      ["dashboard", "deposit", "withdraw", "history"].includes(hash)
+    ) {
       setActiveTab(hash);
     }
 
     const handleHashChange = () => {
-      const newHash = window.location.hash.replace('#', '');
-      if (newHash && ['dashboard', 'deposit', 'withdraw', 'history'].includes(newHash)) {
+      const newHash = window.location.hash.replace("#", "");
+      if (
+        newHash &&
+        ["dashboard", "deposit", "withdraw", "history"].includes(newHash)
+      ) {
         setActiveTab(newHash);
       }
     };
-    
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
 
   return (
     <div className="min-h-screen bg-background">
       <header className="mt-10 ml-8 mr-8">
-      <nav className="flex justify-between items-center mb-6">
+        <nav className="flex justify-between items-center mb-6">
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -103,7 +127,10 @@ export function DashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
           >
-            <Button variant="outline" className="border-cyan-500/50 text-cyan-500 hover:bg-cyan-950/30 border-cyan-500">
+            <Button
+              variant="outline"
+              className="border-cyan-500/50 text-cyan-500 hover:bg-cyan-950/30 border-cyan-500"
+            >
               Documentation
             </Button>
             {isConnected && <WalletConnect />}
@@ -114,7 +141,11 @@ export function DashboardPage() {
         {isConnected ? (
           <>
             <VaultStats />
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
+            <Tabs
+              value={activeTab}
+              onValueChange={setActiveTab}
+              className="mt-6"
+            >
               <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
                 <TabsTrigger value="deposit">Deposit & Mint</TabsTrigger>
@@ -198,65 +229,80 @@ export function DashboardPage() {
                   </motion.div>
 
                   <motion.div
-  initial={{ opacity: 0, y: 20 }}
-  animate={{ opacity: 1, y: 0 }}
-  transition={{ duration: 0.7, delay: 0.3 }}
-  className="mb-8"
->
-  <div className="p-0.5 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-500">
-    <div className="bg-black/80 backdrop-blur-sm rounded-lg p-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
-          <span className="text-sm text-gray-400">Live Metrics</span>
-        </div>
-        <span className="text-xs text-gray-500">Auto-refreshing</span>
-      </div>
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.7, delay: 0.3 }}
+                    className="mb-8"
+                  >
+                    <div className="p-0.5 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-500">
+                      <div className="bg-black/80 backdrop-blur-sm rounded-lg p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
+                            <span className="text-sm text-gray-400">
+                              Live Metrics
+                            </span>
+                          </div>
+                          <span className="text-xs text-gray-500">
+                            Auto-refreshing
+                          </span>
+                        </div>
 
-      <div className="grid grid-cols-3 gap-4">
-        {showLoading ? (
-          // Show skeleton loaders if data is loading
-          <>
-            <div className="bg-slate-900/50 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">TVL</div>
-              <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
-              <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
-            </div>
-            <div className="bg-slate-900/50 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">APY</div>
-              <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
-              <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
-            </div>
-            <div className="bg-slate-900/50 rounded-lg p-3">
-              <div className="text-xs text-gray-500 mb-1">Fee</div>
-              <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
-              <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
-            </div>
-          </>
-        ) : (
-          // Show actual data when loaded
-          <>
-            <MetricCard 
-              label="TVL" 
-              value={`$${formatCurrency(vaultData.tvl)}`} 
-              change={`${vaultData.tvlChange >= 0 ? '+' : ''}${vaultData.tvlChange}%`} 
-            />
-            <APYMetricCard 
-              vaultData={vaultData} 
-              isLoading={showLoading} 
-              formatCurrency={formatCurrency} 
-            />
-            <MetricCard 
-              label="Total Shares" 
-              value={formatCurrency(vaultData.totalShares)} 
-              change={`$${formatCurrency(vaultData.exchangeRate)}/share`} 
-            />
-          </>
-        )}
-      </div>
-    </div>
-  </div>
-</motion.div>
+                        <div className="grid grid-cols-3 gap-4">
+                          {showLoading ? (
+                            // Show skeleton loaders if data is loading
+                            <>
+                              <div className="bg-slate-900/50 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 mb-1">
+                                  TVL
+                                </div>
+                                <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
+                                <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
+                              </div>
+                              <div className="bg-slate-900/50 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 mb-1">
+                                  APY
+                                </div>
+                                <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
+                                <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
+                              </div>
+                              <div className="bg-slate-900/50 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 mb-1">
+                                  Fee
+                                </div>
+                                <div className="h-7 bg-slate-800 rounded animate-pulse mb-1"></div>
+                                <div className="h-4 w-12 bg-slate-800 rounded animate-pulse"></div>
+                              </div>
+                            </>
+                          ) : (
+                            // Show actual data when loaded
+                            <>
+                              <MetricCard
+                                label="TVL"
+                                value={`$${formatCurrency(vaultData.tvl)}`}
+                                change={`${
+                                  vaultData.tvlChange >= 0 ? "+" : ""
+                                }${vaultData.tvlChange}%`}
+                              />
+                              <APYMetricCard
+                                vaultData={vaultData}
+                                isLoading={showLoading}
+                                formatCurrency={formatCurrency}
+                              />
+                              <SharesDisplayCard
+                                label="Total Shares"
+                                value={vaultData.totalShares}
+                                change={`$${formatCurrency(
+                                  vaultData.exchangeRate
+                                )}/share`}
+                                decimals={8}
+                              />
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
                 </div>
 
                 <motion.div
@@ -286,8 +332,9 @@ export function DashboardPage() {
                             transition={{ delay: 0.6 }}
                             className="text-muted-foreground mb-8 text-center max-w-md"
                           >
-                            Connect your wallet to interact with the DeFi Vault. Deposit funds, mint shares, and track
-                            your investments.
+                            Connect your wallet to interact with the DeFi Vault.
+                            Deposit funds, mint shares, and track your
+                            investments.
                           </motion.p>
                           <motion.div
                             initial={{ opacity: 0, y: 10 }}
@@ -308,37 +355,37 @@ export function DashboardPage() {
         )}
       </main>
     </div>
-  )
+  );
 }
 
 // Animated typing text component
 function TypingText({ text, className = "" }) {
-  const [displayText, setDisplayText] = useState("")
-  const index = useRef(0)
+  const [displayText, setDisplayText] = useState("");
+  const index = useRef(0);
 
   useEffect(() => {
     if (index.current < text.length) {
       const timeout = setTimeout(() => {
-        setDisplayText((prev) => prev + text[index.current])
-        index.current += 1
-      }, 50)
+        setDisplayText((prev) => prev + text[index.current]);
+        index.current += 1;
+      }, 50);
 
-      return () => clearTimeout(timeout)
+      return () => clearTimeout(timeout);
     }
-  }, [displayText, text])
+  }, [displayText, text]);
 
   return (
     <p className={className}>
       {displayText}
       <span className="animate-pulse">|</span>
     </p>
-  )
+  );
 }
 
 function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
   const { fetchLidoAPY } = useVault();
   const [localLoading, setLocalLoading] = useState(false);
-  
+
   const refreshAPY = async () => {
     try {
       setLocalLoading(true);
@@ -353,14 +400,14 @@ function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
   // Add this effect to ensure APY is loaded
   useEffect(() => {
     if (!vaultData?.apy && !isLoading && !localLoading) {
-      const lastAttempt = sessionStorage.getItem('apyLoadAttempt');
-      if (!lastAttempt || (Date.now() - parseInt(lastAttempt)) > 60000) {
-        sessionStorage.setItem('apyLoadAttempt', Date.now().toString());
+      const lastAttempt = sessionStorage.getItem("apyLoadAttempt");
+      if (!lastAttempt || Date.now() - parseInt(lastAttempt) > 60000) {
+        sessionStorage.setItem("apyLoadAttempt", Date.now().toString());
         refreshAPY(); // Changed from loadAPY() to refreshAPY()
       }
     }
   }, [vaultData?.apy, isLoading, localLoading, refreshAPY]);
-  
+
   if (isLoading) {
     return (
       <div className="bg-slate-900/50 rounded-lg p-3">
@@ -370,17 +417,19 @@ function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
       </div>
     );
   }
-  
+
   return (
     <div className="bg-slate-900/50 rounded-lg p-3">
       <div className="flex justify-between items-center">
         <div className="text-xs text-gray-500 mb-1">APY</div>
-        <button 
+        <button
           onClick={refreshAPY}
           className="text-xs text-gray-500 hover:text-cyan-400"
           disabled={localLoading}
         >
-          <RefreshCw className={`h-3 w-3 ${localLoading ? "animate-spin" : ""}`} />
+          <RefreshCw
+            className={`h-3 w-3 ${localLoading ? "animate-spin" : ""}`}
+          />
         </button>
       </div>
       <div className="text-xl font-bold text-white mb-1">
@@ -388,11 +437,11 @@ function APYMetricCard({ vaultData, isLoading, formatCurrency }) {
       </div>
       <div className="flex items-center text-xs text-cyan-400">
         Lido + 2%
-        <img 
-          src="/lido-logo.png" 
-          alt="" 
-          className="h-4 w-3 ml-1" 
-          onError={(e) => e.currentTarget.style.display = 'none'}
+        <img
+          src="/lido-logo.png"
+          alt=""
+          className="h-4 w-3 ml-1"
+          onError={(e) => (e.currentTarget.style.display = "none")}
         />
       </div>
     </div>
@@ -414,104 +463,160 @@ function FeatureCard({ icon, title, description }) {
         </div>
       </div>
     </motion.div>
-  )
+  );
 }
 
 // Metric card component
 function MetricCard({ label, value, change }) {
-  const isPositive = typeof change === 'string' && change.startsWith("+");
+  const isPositive = typeof change === "string" && change.startsWith("+");
+
+  // Format the value specifically for display
+  const displayValue = () => {
+    // Handle zero or very small values for better display
+    if (value === 0 || (typeof value === "number" && value < 0.001)) {
+      return label === "Total Shares" ? "No shares" : "0.00";
+    }
+    return typeof value === "string"
+      ? value
+      : parseFloat(value.toFixed(2)).toLocaleString();
+  };
 
   return (
     <div className="bg-slate-900/50 rounded-lg p-3">
       <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className="text-xl font-bold text-white mb-1">{value}</div>
-      <div className={`text-xs ${isPositive ? "text-green-400" : "text-red-400"}`}>{change}</div>
+      <div className="text-xl font-bold text-white mb-1">{displayValue()}</div>
+      <div
+        className={`text-xs ${isPositive ? "text-green-400" : "text-cyan-400"}`}
+      >
+        {change}
+      </div>
     </div>
-  )
+  );
+}
+
+function SharesDisplayCard({ label, value, change, decimals = 6 }) {
+  const isPositive = typeof change === "string" && change.startsWith("+");
+
+  // Format share values with higher precision
+  const displayValue = () => {
+    // Log the actual raw value coming in
+    console.log(`SharesDisplayCard rendering ${label} with raw value:`, value);
+
+    // Handle truly zero values
+    if (value === 0 || value === undefined || value === null) {
+      return label.includes("Your") ? "No shares" : "No shares minted yet";
+    }
+
+    // Handle very small values with appropriate precision
+    if (typeof value === "number") {
+      if (value < 0.000001) return value.toExponential(6);
+      if (value < 0.001) return value.toFixed(decimals);
+      if (value < 1) return value.toFixed(4);
+      return parseFloat(value.toFixed(2)).toLocaleString();
+    }
+
+    return value;
+  };
+
+  return (
+    <div className="bg-slate-900/50 rounded-lg p-3">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      <div className="text-xl font-bold text-white mb-1">{displayValue()}</div>
+      <div
+        className={`text-xs ${isPositive ? "text-green-400" : "text-cyan-400"}`}
+      >
+        {change}
+      </div>
+    </div>
+  );
 }
 
 // Animated background with particles
 function ParticleBackground() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext("2d")
-    let animationFrameId
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    let animationFrameId;
 
     // Set canvas dimensions
     const setCanvasDimensions = () => {
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
-    }
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
 
-    setCanvasDimensions()
-    window.addEventListener("resize", setCanvasDimensions)
+    setCanvasDimensions();
+    window.addEventListener("resize", setCanvasDimensions);
 
     // Particle properties
-    const particlesArray = []
-    const numberOfParticles = 100
+    const particlesArray = [];
+    const numberOfParticles = 100;
 
     class Particle {
       constructor() {
-        this.x = Math.random() * canvas.width
-        this.y = Math.random() * canvas.height
-        this.size = Math.random() * 2 + 0.5
-        this.speedX = Math.random() * 0.5 - 0.25
-        this.speedY = Math.random() * 0.5 - 0.25
-        this.color = `rgba(${Math.floor(Math.random() * 50 + 100)}, ${Math.floor(Math.random() * 50 + 150)}, ${Math.floor(Math.random() * 50 + 200)}, ${Math.random() * 0.5 + 0.1})`
+        this.x = Math.random() * canvas.width;
+        this.y = Math.random() * canvas.height;
+        this.size = Math.random() * 2 + 0.5;
+        this.speedX = Math.random() * 0.5 - 0.25;
+        this.speedY = Math.random() * 0.5 - 0.25;
+        this.color = `rgba(${Math.floor(
+          Math.random() * 50 + 100
+        )}, ${Math.floor(Math.random() * 50 + 150)}, ${Math.floor(
+          Math.random() * 50 + 200
+        )}, ${Math.random() * 0.5 + 0.1})`;
       }
 
       update() {
-        this.x += this.speedX
-        this.y += this.speedY
+        this.x += this.speedX;
+        this.y += this.speedY;
 
-        if (this.x > canvas.width) this.x = 0
-        if (this.x < 0) this.x = canvas.width
-        if (this.y > canvas.height) this.y = 0
-        if (this.y < 0) this.y = canvas.height
+        if (this.x > canvas.width) this.x = 0;
+        if (this.x < 0) this.x = canvas.width;
+        if (this.y > canvas.height) this.y = 0;
+        if (this.y < 0) this.y = canvas.height;
       }
 
       draw() {
-        ctx.fillStyle = this.color
-        ctx.beginPath()
-        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2)
-        ctx.fill()
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
     // Create particles
     const init = () => {
       for (let i = 0; i < numberOfParticles; i++) {
-        particlesArray.push(new Particle())
+        particlesArray.push(new Particle());
       }
-    }
+    };
 
-    init()
+    init();
 
     // Animation loop
     const animate = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       for (let i = 0; i < particlesArray.length; i++) {
-        particlesArray[i].update()
-        particlesArray[i].draw()
+        particlesArray[i].update();
+        particlesArray[i].draw();
       }
 
-      animationFrameId = requestAnimationFrame(animate)
-    }
+      animationFrameId = requestAnimationFrame(animate);
+    };
 
-    animate()
+    animate();
 
     // Cleanup
     return () => {
-      window.removeEventListener("resize", setCanvasDimensions)
-      cancelAnimationFrame(animationFrameId)
-    }
-  }, [])
+      window.removeEventListener("resize", setCanvasDimensions);
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, []);
 
-  return <canvas ref={canvasRef} className="absolute inset-0 z-0" />
+  return <canvas ref={canvasRef} className="absolute inset-0 z-0" />;
 }
 
 // Animated vault illustration
@@ -522,7 +627,11 @@ function VaultAnimation() {
       <motion.div
         initial={{ opacity: 0, rotate: 0 }}
         animate={{ opacity: 1, rotate: 360 }}
-        transition={{ duration: 120, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+        transition={{
+          duration: 120,
+          repeat: Number.POSITIVE_INFINITY,
+          ease: "linear",
+        }}
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[380px] h-[380px] border-2 border-dashed border-cyan-500/30 rounded-full"
       />
 
@@ -530,7 +639,11 @@ function VaultAnimation() {
       <motion.div
         initial={{ opacity: 0, rotate: 0 }}
         animate={{ opacity: 1, rotate: -360 }}
-        transition={{ duration: 90, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+        transition={{
+          duration: 90,
+          repeat: Number.POSITIVE_INFINITY,
+          ease: "linear",
+        }}
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] border-2 border-dashed border-blue-500/40 rounded-full"
       />
 
@@ -538,7 +651,11 @@ function VaultAnimation() {
       <motion.div
         initial={{ opacity: 0, rotate: 0 }}
         animate={{ opacity: 1, rotate: 360 }}
-        transition={{ duration: 60, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+        transition={{
+          duration: 60,
+          repeat: Number.POSITIVE_INFINITY,
+          ease: "linear",
+        }}
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[220px] h-[220px] border-2 border-dashed border-purple-500/50 rounded-full"
       />
 
@@ -568,7 +685,11 @@ function VaultAnimation() {
       <motion.div
         initial={{ opacity: 0, rotate: 0 }}
         animate={{ opacity: 1, rotate: 360 }}
-        transition={{ duration: 20, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+        transition={{
+          duration: 20,
+          repeat: Number.POSITIVE_INFINITY,
+          ease: "linear",
+        }}
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[380px] h-[380px]"
       >
         <motion.div
@@ -582,7 +703,11 @@ function VaultAnimation() {
       <motion.div
         initial={{ opacity: 0, rotate: 90 }}
         animate={{ opacity: 1, rotate: 450 }}
-        transition={{ duration: 25, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+        transition={{
+          duration: 25,
+          repeat: Number.POSITIVE_INFINITY,
+          ease: "linear",
+        }}
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px]"
       >
         <motion.div
@@ -596,7 +721,11 @@ function VaultAnimation() {
       <motion.div
         initial={{ opacity: 0, rotate: 180 }}
         animate={{ opacity: 1, rotate: 540 }}
-        transition={{ duration: 30, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+        transition={{
+          duration: 30,
+          repeat: Number.POSITIVE_INFINITY,
+          ease: "linear",
+        }}
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[220px] h-[220px]"
       >
         <motion.div
@@ -607,5 +736,5 @@ function VaultAnimation() {
         </motion.div>
       </motion.div>
     </div>
-  )
+  );
 }

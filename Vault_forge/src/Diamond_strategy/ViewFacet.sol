@@ -40,6 +40,34 @@ contract ViewFacet {
         return (totalValue * 1e6) / ds.totalShares;
     }
 
+    function getUsedLiquidPortion(
+        address user
+    ) external view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        uint256 totalLiquidPortion = (ds.userDeposits[user] *
+            DiamondStorage.LIQUID_PORTION) / 100;
+
+        if (ds.usedLiquidPortion[user] >= totalLiquidPortion) {
+            return totalLiquidPortion; // Cap at total liquid portion
+        }
+
+        return ds.usedLiquidPortion[user];
+    }
+
+    function getRemainingLiquidPortion(
+        address user
+    ) external view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+        uint256 totalLiquidPortion = (ds.userDeposits[user] *
+            DiamondStorage.LIQUID_PORTION) / 100;
+
+        if (ds.usedLiquidPortion[user] >= totalLiquidPortion) {
+            return 0;
+        }
+
+        return totalLiquidPortion - ds.usedLiquidPortion[user];
+    }
+
     function getWithdrawalStatus(
         address user
     )

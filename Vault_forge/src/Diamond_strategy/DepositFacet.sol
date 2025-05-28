@@ -111,7 +111,7 @@ contract DepositFacet is Modifiers {
         if (assets < DiamondStorage.MIN_DEPOSIT_AMOUNT)
             revert MinimumDepositNotMet();
         if (ds.emergencyShutdown) revert EmergencyShutdown();
-
+        
         // Calculate shares
         uint256 shares = previewDeposit(assets);
         if (shares == 0) revert NoSharesMinted();

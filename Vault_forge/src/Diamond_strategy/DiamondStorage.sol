@@ -4,15 +4,15 @@ pragma solidity ^0.8.20;
 import "../../../lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
 library DiamondStorage {
-    uint256 constant MAX_DEPOSIT_PER_USER = 4999 * 1e6;
+    uint256 constant MAX_DEPOSIT_PER_USER = 30000 * 1e6;
     uint256 constant TIMELOCK_DURATION = 2 days;
     uint256 constant LOCK_PERIOD = 30 days;
     uint256 constant STAKED_PORTION = 40; // 40%
     uint256 constant LIQUID_PORTION = 60; // 60%
     uint256 constant INSTANT_WITHDRAWAL_LIMIT = 60;
     uint256 constant UPDATE_INTERVAL = 1 days;
-    uint256 constant PERFORMANCE_FEE = 300; // 3%
-    uint256 constant MIN_DEPOSIT_AMOUNT = 1 * 1e6; // 1 USDC minimum
+    uint256 constant PERFORMANCE_FEE = 400; // 4%
+    uint256 constant MIN_DEPOSIT_AMOUNT = 1300 * 1e6; // 1300 USDC minimum
     uint256 constant DEPOSIT_TIMELOCK = 1 hours;
     uint256 constant FEE_DENOMINATOR = 10000;
     uint256 constant MINIMUM_FEE = 1e6; // 1 USDC minimum fee
@@ -48,6 +48,7 @@ library DiamondStorage {
         address wstETHAddress;
         address receiverContract;
         // Mappings
+        mapping(address => uint256) usedLiquidPortion;
         mapping(address => uint256) stakedPortions;
         mapping(address => uint256) userDeposits;
         mapping(address => uint256) balances;

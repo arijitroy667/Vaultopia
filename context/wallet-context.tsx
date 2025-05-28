@@ -39,7 +39,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
 
-  const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
+  const usdcAddress = "0x1904f0522FC7f10517175Bd0E546430f1CF0B9Fa";
   const USDC_ABI = [
     "function balanceOf(address account) external view returns (uint256)",
     "function decimals() external view returns (uint8)",
@@ -166,7 +166,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   };
 
   // Check if the connected address is an admin (replace with actual admin address)
-  const adminAddress = "0xaBb39905aE12EfC057a9381A63e9A372BCCc53C1";
+  const adminAddress = "0x9aD95Ef94D945B039eD5E8059603119b61271486";
   const isAdmin = address.toLowerCase() === adminAddress.toLowerCase();
 
   const contextValue = useMemo(
