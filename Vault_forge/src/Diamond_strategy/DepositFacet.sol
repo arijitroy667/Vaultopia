@@ -63,8 +63,6 @@ contract DepositFacet is Modifiers {
     error MinimumDepositNotMet();
     error EmergencyShutdown();
     error NoSharesMinted();
-    error LargeDepositNotTimelocked();
-    error DepositAlreadyQueued();
     error SwapContractNotSet();
     error UnauthorizedCaller();
     error AmountTooSmall();
@@ -117,16 +115,6 @@ contract DepositFacet is Modifiers {
         // Calculate shares
         uint256 shares = previewDeposit(assets);
         if (shares == 0) revert NoSharesMinted();
-
-        // Check for large deposits that need timelock
-        if (ds.totalAssets > 0 && assets > ds.totalAssets / 10) {
-            if (
-                ds.largeDepositUnlockTime[msg.sender] == 0 ||
-                block.timestamp < ds.largeDepositUnlockTime[msg.sender]
-            ) revert LargeDepositNotTimelocked();
-
-            delete ds.largeDepositUnlockTime[msg.sender];
-        }
 
         // Register new user if needed
         if (!ds.isExistingUser[receiver]) {
@@ -337,15 +325,6 @@ contract DepositFacet is Modifiers {
         usdc.approve(ds.swapContract, 0);
 
         return userShare;
-    }
-
-    function queueLargeDeposit() external {
-        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        if (ds.largeDepositUnlockTime[msg.sender] != 0)
-            revert DepositAlreadyQueued();
-        ds.largeDepositUnlockTime[msg.sender] =
-            block.timestamp +
-            DiamondStorage.DEPOSIT_TIMELOCK;
     }
 
     function recoverStuckBatch(bytes32 batchId) external onlyOwner {

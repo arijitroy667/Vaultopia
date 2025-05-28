@@ -59,7 +59,6 @@ library DiamondStorage {
         mapping(bytes4 => bool) supportedInterfaces;
         mapping(bytes32 => uint256) pendingOperations;
         mapping(address => uint256) withdrawalRequestIds;
-        mapping(address => uint256) largeDepositUnlockTime;
         mapping(address => uint256) pendingEthStakes;
         mapping(bytes32 => address[]) stakeBatches;
         mapping(bytes32 => bool) processedBatches;
