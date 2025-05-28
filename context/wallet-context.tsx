@@ -1,12 +1,19 @@
+"use client";
+
 declare global {
   interface Window {
     ethereum?: any;
   }
 }
 
-"use client";
-
-import { createContext, useContext, useState, useMemo, useEffect, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useMemo,
+  useEffect,
+  type ReactNode,
+} from "react";
 import { toast } from "sonner";
 import { ethers } from "ethers";
 
@@ -35,9 +42,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
   const USDC_ABI = [
     "function balanceOf(address account) external view returns (uint256)",
-    "function decimals() external view returns (uint8)"
+    "function decimals() external view returns (uint8)",
   ];
-  
+
   // Check if MetaMask is installed
   const checkMetaMask = () => {
     if (typeof window.ethereum === "undefined") {
@@ -54,6 +61,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!checkMetaMask()) return;
 
     try {
+      await window.ethereum.request({ method: "eth_requestAccounts" });
       const etherprovider = new ethers.BrowserProvider(window.ethereum);
       setProvider(etherprovider);
       const signer = await etherprovider.getSigner();
@@ -66,7 +74,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         const usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, signer);
         const usdcDecimals = await usdcContract.decimals();
         const usdcBalanceRaw = await usdcContract.balanceOf(userAddress);
-        const formattedUsdcBalance = Number(ethers.formatUnits(usdcBalanceRaw, usdcDecimals));
+        const formattedUsdcBalance = Number(
+          ethers.formatUnits(usdcBalanceRaw, usdcDecimals)
+        );
         setUsdcBalance(formattedUsdcBalance);
 
         console.log("Raw USDC balance:", usdcBalanceRaw.toString());
@@ -78,7 +88,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setBalance(formattedBalance);
 
       toast.success("Wallet connected", {
-        description: `Connected to ${userAddress.substring(0, 6)}...${userAddress.slice(-4)}`,
+        description: `Connected to ${userAddress.substring(
+          0,
+          6
+        )}...${userAddress.slice(-4)}`,
       });
     } catch (error) {
       console.error("Failed to connect wallet:", error);
@@ -89,42 +102,54 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   };
 
   // Add these to the WalletProvider component
-useEffect(() => {
-  // Check if already connected from previous session
-  const checkConnection = async () => {
-    if (window.ethereum && window.ethereum.selectedAddress) {
-      connect();
-    }
-  };
-  
-  checkConnection();
-  
-  // Add event listeners for MetaMask events
-  if (window.ethereum) {
-    window.ethereum.on('accountsChanged', (accounts) => {
-      if (accounts.length === 0) {
-        // User disconnected their wallet
-        disconnect();
-      } else {
-        // User switched accounts, reconnect
-        connect();
+  useEffect(() => {
+    // Check if already connected from previous session
+    const checkConnection = async () => {
+      if (window.ethereum) {
+        try {
+          // Try to get accounts, which will prompt if not already authorized
+          const accounts = await window.ethereum.request({
+            method: "eth_accounts", // This doesn't prompt, just checks existing permissions
+          });
+
+          if (accounts && accounts.length > 0) {
+            // User has previously authorized this site
+            connect();
+          }
+        } catch (error) {
+          console.log("Not connected to MetaMask");
+        }
       }
-    });
-    
-    window.ethereum.on('chainChanged', () => {
-      // Network changed, refresh the page
-      window.location.reload();
-    });
-  }
-  
-  // Cleanup event listeners
-  return () => {
+    };
+
+    checkConnection();
+
+    // Add event listeners for MetaMask events
     if (window.ethereum) {
-      window.ethereum.removeListener('accountsChanged', () => {});
-      window.ethereum.removeListener('chainChanged', () => {});
+      window.ethereum.on("accountsChanged", (accounts) => {
+        if (accounts.length === 0) {
+          // User disconnected their wallet
+          disconnect();
+        } else {
+          // User switched accounts, reconnect
+          connect();
+        }
+      });
+
+      window.ethereum.on("chainChanged", () => {
+        // Network changed, refresh the page
+        window.location.reload();
+      });
     }
-  };
-}, []);
+
+    // Cleanup event listeners
+    return () => {
+      if (window.ethereum) {
+        window.ethereum.removeListener("accountsChanged", () => {});
+        window.ethereum.removeListener("chainChanged", () => {});
+      }
+    };
+  }, []);
 
   // Disconnect wallet
   const disconnect = () => {
@@ -141,20 +166,25 @@ useEffect(() => {
   };
 
   // Check if the connected address is an admin (replace with actual admin address)
-  const adminAddress = process.env.NEXT_PUBLIC_ADMIN_ADDRESS || "0x9aD95Ef94D945B039eD5E8059603119b61271486";
+  const adminAddress =
+    process.env.NEXT_PUBLIC_ADMIN_ADDRESS ||
+    "0x9aD95Ef94D945B039eD5E8059603119b61271486";
   const isAdmin = address.toLowerCase() === adminAddress.toLowerCase();
 
-const contextValue = useMemo(() => ({
-  isConnected, 
-  isAdmin, 
-  address, 
-  balance,
-  usdcBalance,
-  provider,
-  signer, 
-  connect, 
-  disconnect
-}), [isConnected, isAdmin, address, balance, usdcBalance, provider, signer]);
+  const contextValue = useMemo(
+    () => ({
+      isConnected,
+      isAdmin,
+      address,
+      balance,
+      usdcBalance,
+      provider,
+      signer,
+      connect,
+      disconnect,
+    }),
+    [isConnected, isAdmin, address, balance, usdcBalance, provider, signer]
+  );
 
   return (
     <WalletContext.Provider value={contextValue}>
@@ -162,8 +192,6 @@ const contextValue = useMemo(() => ({
     </WalletContext.Provider>
   );
 }
-
-
 
 export function useWallet() {
   const context = useContext(WalletContext);

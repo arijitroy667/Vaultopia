@@ -40,7 +40,7 @@ async function main() {
     
     // Set deposit amounts
     const usdcAmountToDeposit = ethers.parseUnits("1000", decimals); // 1000 USDC
-    const ethAmountToDeposit = ethers.parseEther("3"); // 3ETH
+    const ethAmountToDeposit = ethers.parseEther("1"); // 3ETH
     
     // PART 1: USDC DEPOSIT
     
