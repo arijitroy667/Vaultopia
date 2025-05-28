@@ -476,7 +476,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     currentFee: 2.0,
   });
 
-  const diamondAddress = "0x6A36f5E31cB854573688D6603303C096433f114e";
+  const diamondAddress = "0x362bD1C1a631eC66Ef3535F12325bC69D5e0523c";
   const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
 
   // Initialize contracts when wallet connects
@@ -718,47 +718,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       loadTransactionHistory,
     ]
   );
-
-  const checkContractConfiguration = async () => {
-    if (!diamondContract) return null;
-
-    try {
-      // Get addresses
-      const swapAddr = "0x5C7cda1d0784d0D662E772A2a5450EA48fd687e2";
-      const receiverAddr = "0xE6BEd67ca3cE5594C123824F77775a413C7aA99e";
-      const wstEthAddr = "0x8d09a4502Cc8Cf1547aD300E066060D043f6982D"; // Default wstETH on Holesky
-      const lidoAddr = "0xc7cc160b58F8Bb0baC94b80847E2CF2800565C50"; // Default Lido on Holesky
-
-      console.log("Contract configuration:", {
-        swapContract: swapAddr,
-        receiverContract: receiverAddr,
-        wstETHAddress: wstEthAddr,
-        lidoWithdrawalAddress: lidoAddr,
-        diamondContract: diamondContract.target,
-      });
-
-      // Check if addresses are valid
-      const issues = [];
-      if (!ethers.isAddress(swapAddr) || swapAddr === ethers.ZeroAddress)
-        issues.push("Swap contract not set");
-      if (
-        !ethers.isAddress(receiverAddr) ||
-        receiverAddr === ethers.ZeroAddress
-      )
-        issues.push("Receiver contract not set");
-
-      return {
-        isConfigurationValid: issues.length === 0,
-        issues,
-      };
-    } catch (error) {
-      console.error("Configuration check failed:", error);
-      return {
-        isConfigurationValid: false,
-        issues: ["Failed to check configuration"],
-      };
-    }
-  };
 
   // Core function for approval and deposit with enhanced diagnostics
   const approveAndDeposit = async (

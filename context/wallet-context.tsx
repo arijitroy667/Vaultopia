@@ -166,9 +166,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   };
 
   // Check if the connected address is an admin (replace with actual admin address)
-  const adminAddress =
-    process.env.NEXT_PUBLIC_ADMIN_ADDRESS ||
-    "0x9aD95Ef94D945B039eD5E8059603119b61271486";
+  const adminAddress = "0xaBb39905aE12EfC057a9381A63e9A372BCCc53C1";
   const isAdmin = address.toLowerCase() === adminAddress.toLowerCase();
 
   const contextValue = useMemo(
