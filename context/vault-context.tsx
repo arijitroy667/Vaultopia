@@ -476,8 +476,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     currentFee: 2.0,
   });
 
-  const diamondAddress = "0x362bD1C1a631eC66Ef3535F12325bC69D5e0523c";
-  const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
+  const diamondAddress = "0x48Eee1f1042CD0Dc6EED68A26566C8d787491F01";
+  const usdcAddress = "0x1904f0522FC7f10517175Bd0E546430f1CF0B9Fa";
 
   // Initialize contracts when wallet connects
   useEffect(() => {

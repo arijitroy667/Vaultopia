@@ -19,7 +19,7 @@ const SWAP_ABI = [
 async function main() {
   try {
     // Connect to provider (using Holesky testnet)
-    const provider = new ethers.JsonRpcProvider("https://eth-holesky.g.alchemy.com/v2/NZ1c4Vu21IOmBWCLeIe2oVMFLgLbfMLs");
+    const provider = new ethers.JsonRpcProvider("https://shy-sly-paper.ethereum-hoodi.quiknode.pro/9d08f68df2e209e40d019a2eea5194b64fcf0d1a");
     
     // Connect wallet
     const privateKey = "144b73c3645e2cc6522c3e090e3892afc693133cae399c271af91fde7332d6e4";
@@ -27,8 +27,8 @@ async function main() {
     console.log(`Connected to wallet: ${wallet.address}`);
     
     // Contract addresses
-    const swapContractAddress = "0x5C7cda1d0784d0D662E772A2a5450EA48fd687e2"; // Replace with your deployed contract
-    const usdcAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8";
+    const swapContractAddress = "0xD31E06B76C3bc37cc0C0328835881096Ee8E51ad"; // Replace with your deployed contract
+    const usdcAddress = "0x1904f0522FC7f10517175Bd0E546430f1CF0B9Fa";
     
     // Connect to contracts
     const swapContract = new ethers.Contract(swapContractAddress, SWAP_ABI, wallet);
@@ -39,8 +39,8 @@ async function main() {
     console.log(`USDC has ${decimals} decimals`);
     
     // Set deposit amounts
-    const usdcAmountToDeposit = ethers.parseUnits("1000", decimals); // 1000 USDC
-    const ethAmountToDeposit = ethers.parseEther("1"); // 3ETH
+    const usdcAmountToDeposit = ethers.parseUnits("5000", decimals); // 5000 USDC
+    const ethAmountToDeposit = ethers.parseEther("2"); // 3ETH
     
     // PART 1: USDC DEPOSIT
     

@@ -88,10 +88,10 @@ async function main() {
   console.log("Starting Diamond pattern deployment...");
   
   // Use environment variable for provider URL - never hardcode API keys
-  const provider = new ethers.JsonRpcProvider('https://eth-holesky.g.alchemy.com/v2/NZ1c4Vu21IOmBWCLeIe2oVMFLgLbfMLs');
+  const provider = new ethers.JsonRpcProvider('https://shy-sly-paper.ethereum-hoodi.quiknode.pro/9d08f68df2e209e40d019a2eea5194b64fcf0d1a');
   
   // Load private key from environment variable - never hardcode private keys
-  const privateKey = process.env.NEXT_PUBLIC_PRIVATE_KEY || "d2e4e01ab9b92394317a4850a8321a62f30c4609d936b6bf79e0321791b32d25";
+  const privateKey = process.env.NEXT_PUBLIC_PRIVATE_KEY || "144b73c3645e2cc6522c3e090e3892afc693133cae399c271af91fde7332d6e4";
   if (!privateKey) {
     throw new Error("PRIVATE_KEY environment variable is not set");
   }
@@ -100,11 +100,11 @@ async function main() {
   console.log(`Deployer address: ${wallet.address}`);
   
   // Addresses for initialization - replace with actual addresses
-  const lidoWithdrawalAddress = "0xc7cc160b58F8Bb0baC94b80847E2CF2800565C50";
-  const wstETHAddress = "0x8d09a4502Cc8Cf1547aD300E066060D043f6982D";
-  const receiverAddress = "0xd000d2399499aB96a3fa023c8964aFBB459AAE6D";
-  const swapContractAddress = "0x5C7cda1d0784d0D662E772A2a5450EA48fd687e2";
-  const assetTokenAddress = "0x06901fD3D877db8fC8788242F37c1A15f05CEfF8"; // USDC
+  const lidoWithdrawalAddress = "0xfe56573178f1bcdf53F01A6E9977670dcBBD9186";
+  const wstETHAddress = "0x7E99eE3C66636DE415D2d7C880938F2f40f94De4";
+  const receiverAddress = "0x5b04981Ba22280359EC4Ca3d8B5EdAC55984De47";
+  const swapContractAddress = "0xD31E06B76C3bc37cc0C0328835881096Ee8E51ad";
+  const assetTokenAddress = "0x1904f0522FC7f10517175Bd0E546430f1CF0B9Fa"; // USDC
   
   // Deploy DiamondCutFacet
   console.log("1. Deploying DiamondCutFacet...");
