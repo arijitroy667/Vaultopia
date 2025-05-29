@@ -381,21 +381,32 @@ export function DashboardPage() {
   );
 }
 
-// Animated typing text component
+// Fixed TypingText component
 function TypingText({ text, className = "" }) {
   const [displayText, setDisplayText] = useState("");
-  const index = useRef(0);
+  const indexRef = useRef(0);
+  const textRef = useRef(text);
 
+  // Reset animation when text changes
   useEffect(() => {
-    if (index.current < text.length) {
+    indexRef.current = 0;
+    setDisplayText("");
+    textRef.current = text;
+  }, [text]);
+
+  // Handle typing animation
+  useEffect(() => {
+    if (indexRef.current < textRef.current.length) {
       const timeout = setTimeout(() => {
-        setDisplayText((prev) => prev + text[index.current]);
-        index.current += 1;
+        setDisplayText((prev) =>
+          textRef.current.substring(0, indexRef.current + 1)
+        );
+        indexRef.current += 1;
       }, 50);
 
       return () => clearTimeout(timeout);
     }
-  }, [displayText, text]);
+  }, [displayText]);
 
   return (
     <p className={className}>
