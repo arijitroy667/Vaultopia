@@ -9,11 +9,10 @@ Vaultopia is a decentralized ERC-4626-compliant vault that enables users to depo
 ## 🔹 Key Features
 
 - ✅ **ERC-4626 Compliant** – Standardized vault interface for seamless DeFi integrations.  
-- 🔄 **Deposit & Withdraw** – Deposit USDC and receive yield-bearing shares.  
-- 📈 **Auto-Compounding** – Earnings are automatically reinvested to maximize returns.  
+- 🔄 **Deposit & Withdraw** – Deposit USDC and receive vault shares.  
 - 🔐 **Secure & Transparent** – Trustless smart contract-based fund management.  
 - ⚙️ **Diamond Standard (ERC-2535)** – Modular and fully upgradable architecture.  
-- 🧠 **Lido Integration** – Utilizes Lido for ETH staking to generate sustainable yield.  
+- 🧠 **Lido Integration** – Utilizes Lido V3 for ETH staking to generate sustainable yield.  
 - 🧊 **Hybrid Liquidity** – 60% of deposits remain liquid; 40% are locked for 30 days for optimized yield.  
 - 📉 **Minimum Deposit** – 1300 USDC minimum to maintain strategy efficiency.
 
@@ -24,7 +23,7 @@ Vaultopia is a decentralized ERC-4626-compliant vault that enables users to depo
 - **Network**: Ethereum (EVM-compatible; deployed on Hoodi Testnet)  
 - **Vault Token**: USDC  
 - **Vault Standard**: ERC-4626  
-- **Contract Address**: *[Add deployed contract address here]*
+
 
 ---
 
