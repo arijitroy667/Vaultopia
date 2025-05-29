@@ -86,10 +86,12 @@ contract WithdrawFacet is Modifiers {
         if (ds.emergencyShutdown) revert EmergencyShutdown();
         if (msg.sender != _owner) revert("Not authorized");
 
-        // Calculate withdrawable amount
+        // Calculate withdrawable amount directly
+        uint256 withdrawableAmount = 0;
+        uint256 remainingLiquidPortion = 0;
         (
-            uint256 withdrawableAmount,
-            uint256 remainingLiquidPortion
+            withdrawableAmount,
+            remainingLiquidPortion
         ) = calculateWithdrawableAmount(_owner);
 
         // Ensure user isn't withdrawing more than allowed

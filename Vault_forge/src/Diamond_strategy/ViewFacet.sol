@@ -228,31 +228,6 @@ contract ViewFacet {
             ds.lastDailyUpdate + DiamondStorage.UPDATE_INTERVAL;
     }
 
-    function maxWithdraw(address _owner) external view returns (uint256) {
-        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
-        uint256 totalUserAssets = this.convertToAssets(ds.balances[_owner]);
-
-        // Check if ANY deposits are unlocked
-        bool hasUnlockedDeposits = false;
-        for (uint256 i = 0; i < ds.userStakedDeposits[_owner].length; i++) {
-            if (
-                block.timestamp >=
-                ds.userStakedDeposits[_owner][i].timestamp +
-                    DiamondStorage.LOCK_PERIOD
-            ) {
-                hasUnlockedDeposits = true;
-                break;
-            }
-        }
-
-        if (!hasUnlockedDeposits) {
-            return
-                (ds.totalAssets * DiamondStorage.INSTANT_WITHDRAWAL_LIMIT) /
-                100;
-        }
-        return totalUserAssets;
-    }
-
     // Helper conversion function used by many facets
     function convertToAssets(uint256 shares) public view returns (uint256) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
@@ -275,5 +250,109 @@ contract ViewFacet {
     function lastDailyUpdate() external view returns (uint256) {
         DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
         return ds.lastDailyUpdate;
+    }
+
+    function maxWithdraw(address _owner) external view returns (uint256) {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        // Calculate total liquid portion (60% of total deposits)
+        uint256 totalLiquidPortion = (ds.userDeposits[_owner] *
+            DiamondStorage.LIQUID_PORTION) / 100;
+
+        // Calculate remaining liquid portion
+        uint256 remainingLiquidPortion = 0;
+        if (totalLiquidPortion > ds.usedLiquidPortion[_owner]) {
+            remainingLiquidPortion =
+                totalLiquidPortion -
+                ds.usedLiquidPortion[_owner];
+        }
+
+        // Start with remaining liquid portion
+        uint256 withdrawable = remainingLiquidPortion;
+
+        // Add matured deposits
+        for (uint256 i = 0; i < ds.userStakedDeposits[_owner].length; i++) {
+            if (
+                !ds.userStakedDeposits[_owner][i].withdrawn &&
+                block.timestamp >=
+                ds.userStakedDeposits[_owner][i].timestamp +
+                    DiamondStorage.LOCK_PERIOD
+            ) {
+                withdrawable += ds.userStakedDeposits[_owner][i].amount;
+            }
+        }
+
+        // Cap the withdrawable amount by the user's total balance
+        uint256 totalBalance = this.convertToAssets(ds.balances[_owner]);
+        if (withdrawable > totalBalance) {
+            withdrawable = totalBalance;
+        }
+
+        return withdrawable;
+    }
+
+    // Add a new helper function to get calculated withdrawal info
+    function getWithdrawalDetails(
+        address user
+    )
+        external
+        view
+        returns (
+            uint256 totalDeposit,
+            uint256 totalLiquid,
+            uint256 usedLiquid,
+            uint256 remainingLiquid,
+            uint256 lockedAmount,
+            uint256 maturedLockedAmount,
+            uint256 totalWithdrawable
+        )
+    {
+        DiamondStorage.VaultState storage ds = DiamondStorage.getStorage();
+
+        // Calculate total amounts
+        totalDeposit = ds.userDeposits[user];
+        totalLiquid = (totalDeposit * DiamondStorage.LIQUID_PORTION) / 100;
+        usedLiquid = ds.usedLiquidPortion[user];
+
+        // Calculate remaining liquid portion
+        remainingLiquid = 0;
+        if (totalLiquid > usedLiquid) {
+            remainingLiquid = totalLiquid - usedLiquid;
+        }
+
+        // Calculate matured locked deposits
+        maturedLockedAmount = 0;
+        for (uint256 i = 0; i < ds.userStakedDeposits[user].length; i++) {
+            if (
+                !ds.userStakedDeposits[user][i].withdrawn &&
+                block.timestamp >=
+                ds.userStakedDeposits[user][i].timestamp +
+                    DiamondStorage.LOCK_PERIOD
+            ) {
+                maturedLockedAmount += ds.userStakedDeposits[user][i].amount;
+            }
+        }
+
+        // Calculate total locked amount (40% of deposits)
+        lockedAmount = (totalDeposit * DiamondStorage.STAKED_PORTION) / 100;
+
+        // Calculate total withdrawable
+        totalWithdrawable = remainingLiquid + maturedLockedAmount;
+
+        // Cap by user's actual balance
+        uint256 totalBalance = this.convertToAssets(ds.balances[user]);
+        if (totalWithdrawable > totalBalance) {
+            totalWithdrawable = totalBalance;
+        }
+
+        return (
+            totalDeposit,
+            totalLiquid,
+            usedLiquid,
+            remainingLiquid,
+            lockedAmount,
+            maturedLockedAmount,
+            totalWithdrawable
+        );
     }
 }

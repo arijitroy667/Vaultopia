@@ -31,17 +31,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ethers } from "ethers";
 import { Progress } from "@/components/ui/progress";
-
-const DIAMOND_ABI = [
-  "function withdraw(uint256 assets, address receiver, address owner) external returns (uint256)",
-  "function previewWithdraw(uint256 assets) public view returns (uint256)",
-  "function maxWithdraw(address owner) external view returns (uint256)",
-  "function getWithdrawableAmount(address user) external view returns (uint256)",
-  "function getLockedAmount(address user) external view returns (uint256)",
-  "function getUnlockTime(address user) external view returns (uint256[])",
-  "function userDeposits(address user) external view returns (uint256)",
-  "function usedLiquidPortion(address user) external view returns (uint256)",
-];
+import { DIAMOND_ABI } from "@/context/vault-context";
 
 export function WithdrawSection() {
   const [amount, setAmount] = useState("");
@@ -59,7 +49,7 @@ export function WithdrawSection() {
   // Effect to fetch withdrawable amount when component mounts or address changes
   useEffect(() => {
     if (isConnected && address && provider && diamondAddress) {
-      fetchWithdrawableAmount();
+      fetchWithdrawalAmount();
     } else {
       setWithdrawableAmount("0");
       setLockedAmount("0");
@@ -70,7 +60,7 @@ export function WithdrawSection() {
     }
   }, [isConnected, address, provider, userShares, diamondAddress]);
 
-  const fetchWithdrawableAmount = async () => {
+  const fetchWithdrawalAmount = async () => {
     setIsChecking(true);
     try {
       const signer = await provider!.getSigner();
@@ -80,45 +70,41 @@ export function WithdrawSection() {
         signer
       );
 
-      // Get all relevant withdrawal data
-      const [actualWithdrawable, theoreticalWithdrawable, locked, liquidUsed] =
-        await Promise.all([
-          diamondContract.maxWithdraw(address),
-          diamondContract.getWithdrawableAmount(address),
-          diamondContract.getLockedAmount(address),
-          diamondContract.usedLiquidPortion(address),
-        ]);
+      // Use the new comprehensive function
+      const withdrawalDetails = await diamondContract.getWithdrawalDetails(
+        address
+      );
 
-      let deposits = 0;
-      try {
-        // Try to calculate from other available data
-        const totalUserBalance = await diamondContract.convertToAssets(
-          await diamondContract.balanceOf(address)
-        );
-        // Use the total balance as a fallback estimate
-        deposits = totalUserBalance;
-        console.log("Using estimated deposits value:", deposits);
-      } catch (error) {
-        console.warn("Could not fetch or estimate user deposits:", error);
-      }
+      // Destructure all values returned by the function
+      const [
+        totalDeposit,
+        totalLiquid,
+        usedLiquid,
+        remainingLiquid,
+        lockedAmount,
+        maturedLockedAmount,
+        totalWithdrawable,
+      ] = withdrawalDetails;
 
-      // Set state with formatted values
-      setWithdrawableAmount(ethers.formatUnits(actualWithdrawable, 6));
-      setLockedAmount(ethers.formatUnits(locked, 6));
-      setTotalDeposits(ethers.formatUnits(deposits, 6));
-      setUsedLiquidPortion(ethers.formatUnits(liquidUsed, 6));
+      // Set state with properly formatted values
+      setWithdrawableAmount(ethers.formatUnits(totalWithdrawable, 6));
+      setLockedAmount(ethers.formatUnits(lockedAmount, 6));
+      setTotalDeposits(ethers.formatUnits(totalDeposit, 6));
+      setUsedLiquidPortion(ethers.formatUnits(usedLiquid, 6));
 
-      // Log for debugging
-      console.log({
-        actualWithdrawable: ethers.formatUnits(actualWithdrawable, 6),
-        theoreticalWithdrawable: ethers.formatUnits(theoreticalWithdrawable, 6),
-        locked: ethers.formatUnits(locked, 6),
-        totalDeposits: ethers.formatUnits(deposits, 6),
-        usedLiquidPortion: ethers.formatUnits(liquidUsed, 6),
+      // Display actual values to user for clarity
+      console.log("Withdrawal details:", {
+        totalDeposit: ethers.formatUnits(totalDeposit, 6),
+        totalLiquid: ethers.formatUnits(totalLiquid, 6),
+        usedLiquid: ethers.formatUnits(usedLiquid, 6),
+        remainingLiquid: ethers.formatUnits(remainingLiquid, 6),
+        lockedAmount: ethers.formatUnits(lockedAmount, 6),
+        maturedLocked: ethers.formatUnits(maturedLockedAmount, 6),
+        totalWithdrawable: ethers.formatUnits(totalWithdrawable, 6),
       });
 
       // Get unlock times if there are locked funds
-      if (ethers.getBigInt(locked) !== BigInt(0)) {
+      if (ethers.getBigInt(lockedAmount) !== BigInt(0)) {
         const times = await diamondContract.getUnlockTime(address);
         setUnlockTimes(times.map((t) => Number(t)));
       } else {
@@ -151,7 +137,7 @@ export function WithdrawSection() {
     try {
       await withdraw(withdrawAmount);
       setAmount("");
-      await fetchWithdrawableAmount(); // Refresh after withdrawal
+      await fetchWithdrawalAmount(); // Refresh after withdrawal
     } catch (error) {
       console.error("Withdrawal failed:", error);
     } finally {
@@ -310,18 +296,33 @@ export function WithdrawSection() {
                       <TooltipContent className="max-w-[280px]">
                         <p>
                           You can withdraw up to 60% of your deposits
-                          immediately. Once used, you'll need to wait for the
-                          30-day lock period before withdrawing more.
+                          immediately.{" "}
+                          {usedLiquidVal >= totalLiquidPortion
+                            ? "You've already withdrawn your liquid portion, so the remaining funds are locked for the 30-day period."
+                            : `You've used ${usedLiquidVal.toFixed(
+                                2
+                              )} of your ${totalLiquidPortion.toFixed(
+                                2
+                              )} USDC liquid allocation.`}
                         </p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <span className="text-sm">
-                  {usedLiquidVal.toFixed(2)} / {totalLiquidPortion.toFixed(2)}{" "}
-                  USDC used
-                </span>
+
+                {/* Show actual withdrawal history */}
+                {parseFloat(withdrawableAmount) > 0 ? (
+                  <span className="text-sm">
+                    {parseFloat(withdrawableAmount).toFixed(2)} USDC available
+                  </span>
+                ) : (
+                  <span className="text-sm text-amber-600">
+                    Fully used ({usedLiquidVal.toFixed(2)} USDC withdrawn)
+                  </span>
+                )}
               </div>
+
+              {/* Progress bar showing used percentage */}
               <Progress value={liquidPortionUsedPercentage} className="h-2" />
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>0%</span>
@@ -339,17 +340,21 @@ export function WithdrawSection() {
             </div>
           )}
 
+          {/* Update the locked funds info card */}
           {hasLockedFunds && (
             <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-3 text-xs flex items-start gap-2 text-amber-800 dark:text-amber-400">
               <LockIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <div>
-                <p className="font-medium">Locked Funds</p>
+                <p className="font-medium">
+                  Locked Funds (40% of your deposit)
+                </p>
                 <p className="mt-1">
-                  You have {parseFloat(lockedAmount).toFixed(2)} USDC locked.
+                  You have {parseFloat(lockedAmount).toFixed(2)} USDC locked
+                  from your total deposit of {totalDepositVal.toFixed(2)} USDC.
                   {unlockInfo && (
                     <>
                       {" "}
-                      Next unlock: {unlockInfo.date} at {unlockInfo.time} (in{" "}
+                      Unlock date: {unlockInfo.date} at {unlockInfo.time} (in{" "}
                       {unlockInfo.remaining})
                     </>
                   )}

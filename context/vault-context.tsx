@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { ethers } from "ethers";
 
 // ABI snippets for the functions we need
-const DIAMOND_ABI = [
+export const DIAMOND_ABI = [
   "function deposit(uint256 assets, address receiver) external returns (uint256)",
   "function previewDeposit(uint256 assets) public view returns (uint256)",
   "function queueLargeDeposit() external",
@@ -37,6 +37,10 @@ const DIAMOND_ABI = [
   "function depositsPaused() external view returns (bool)",
   "function accumulatedFees() external view returns (uint256)",
   "function lastDailyUpdate() external view returns (uint256)",
+  "function getUsedLiquidPortion(address user) external view returns (uint256)",
+  "function getRemainingLiquidPortion(address user) external view returns (uint256)",
+  "function convertToAssets(uint256 shares) public view returns (uint256)",
+  "function getWithdrawalDetails(address user) external view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256)",
   // Admin functions
   "function setPerformanceFee(uint256 fee) external",
   "function setDepositsPaused(bool paused) external",
@@ -246,6 +250,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Modify the loadTransactionHistory function
   const loadTransactionHistory = async () => {
     if (!isConnected || !address || !diamondContract || !provider) return;
 
@@ -262,15 +267,16 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
       // Get the current block
       const currentBlock = await provider.getBlockNumber();
-      const blocksPerDay = 7200; // 86400 / 12
-      const lookbackDays = 30;
-      const startBlock = Math.max(
-        currentBlock - blocksPerDay * lookbackDays,
-        0
+      // Look back 14 days (about 100,800 blocks on Ethereum)
+      const lookbackBlocks = 100800;
+      const startBlock = Math.max(currentBlock - lookbackBlocks, 0);
+
+      console.log(
+        `Querying events from block ${startBlock} to ${currentBlock}`
       );
 
       // Process in chunks to avoid "maximum block range exceeded" errors
-      const MAX_BLOCK_RANGE = 40000; // Using 40k to be safe
+      const MAX_BLOCK_RANGE = 2000;
 
       // Initialize arrays for collecting events
       const allDepositEvents = [];
@@ -281,8 +287,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
       while (fromBlock <= currentBlock) {
         const toBlock = Math.min(fromBlock + MAX_BLOCK_RANGE, currentBlock);
-
-        console.log(`Querying events from block ${fromBlock} to ${toBlock}`);
 
         try {
           // Fetch events in parallel for this chunk
@@ -297,12 +301,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
           // Move to next chunk
           fromBlock = toBlock + 1;
-
-          // If we've processed all blocks, break
-          if (toBlock >= currentBlock) break;
         } catch (error) {
           console.error(
-            `Error querying events from ${fromBlock} to ${toBlock}:`,
+            `Error querying events for block range ${fromBlock}-${toBlock}:`,
             error
           );
           // If there's an error, try a smaller range or move on
@@ -310,20 +311,23 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      console.log(
+        `Found ${allDepositEvents.length} deposits and ${allWithdrawEvents.length} withdrawals`
+      );
+
       // Process deposit events
       const depositTransactions = await Promise.all(
         allDepositEvents.map(async (event) => {
           const block = await event.getBlock();
-          const typedEvent = event as ethers.EventLog;
           return {
             type: "deposit",
-            amount: Number(ethers.formatUnits(typedEvent.args.assets, 6)),
-            shares: Number(ethers.formatUnits(typedEvent.args.shares, 18)),
-            timestamp: block?.timestamp ? block.timestamp * 1000 : Date.now(),
+            amount: Number(ethers.formatUnits(event.args.assets, 6)),
+            shares: Number(ethers.formatUnits(event.args.shares, 18)),
+            timestamp: block.timestamp * 1000, // Convert to milliseconds
             status: "completed",
             txHash: event.transactionHash,
-            id: event.transactionHash, // Add a unique ID for deduplication
-          } as Transaction;
+            id: event.transactionHash,
+          };
         })
       );
 
@@ -331,52 +335,37 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       const withdrawTransactions = await Promise.all(
         allWithdrawEvents.map(async (event) => {
           const block = await event.getBlock();
-          const typedEvent = event as ethers.EventLog;
           return {
             type: "withdraw",
-            amount: Number(ethers.formatUnits(typedEvent.args.assets, 6)),
-            shares: Number(ethers.formatUnits(typedEvent.args.shares, 18)),
-            timestamp: block?.timestamp ? block.timestamp * 1000 : Date.now(),
+            amount: Number(ethers.formatUnits(event.args.assets, 6)),
+            shares: Number(ethers.formatUnits(event.args.shares, 18)),
+            timestamp: block.timestamp * 1000, // Convert to milliseconds
             status: "completed",
             txHash: event.transactionHash,
-            id: event.transactionHash, // Add a unique ID for deduplication
-          } as Transaction;
+            id: event.transactionHash,
+          };
         })
       );
 
-      // Combine on-chain transactions
-      const onChainTransactions = [
-        ...depositTransactions,
-        ...withdrawTransactions,
-      ];
+      // Combine all transactions
+      const onChainTxs = [...depositTransactions, ...withdrawTransactions];
 
-      // Get existing transactions from state
-      const existingTransactions = [...transactions];
-
-      // Create a map of transaction hashes for deduplication
-      const txHashSet = new Set(onChainTransactions.map((tx) => tx.txHash));
-
-      // Keep pending transactions that aren't yet on-chain
-      const pendingTransactions = existingTransactions.filter(
-        (tx) => tx.status === "pending" && !txHashSet.has(tx.txHash)
-      );
-
-      // Failed transactions worth keeping
-      const failedTransactions = existingTransactions.filter(
+      // Add pending transactions that aren't yet confirmed
+      const pendingTxs = transactions.filter(
         (tx) =>
-          tx.status === "failed" &&
-          Date.now() - tx.timestamp < 24 * 60 * 60 * 1000 // Keep failed txs for 24h
+          tx.status === "pending" &&
+          !onChainTxs.some((onChain) => onChain.txHash === tx.txHash)
       );
 
-      // Combine and sort all transactions by timestamp (newest first)
-      const mergedTransactions = [
-        ...pendingTransactions,
-        ...failedTransactions,
-        ...onChainTransactions,
-      ].sort((a, b) => b.timestamp - a.timestamp);
+      // Sort all transactions by timestamp (newest first)
+      const allTransactions = [...pendingTxs, ...onChainTxs].sort(
+        (a, b) => b.timestamp - a.timestamp
+      );
 
-      // Update transactions state with merged data
-      updateTransactions(mergedTransactions);
+      console.log("Loaded transactions:", allTransactions);
+
+      // Update the transactions state
+      updateTransactions(allTransactions);
     } catch (error) {
       console.error("Error loading transaction history:", error);
     } finally {
@@ -530,7 +519,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     currentFee: 2.0,
   });
 
-  const diamondAddress = "0x1515C4ceA0Ce5e2bd61838F73f3c2D640A6080Bf";
+  const diamondAddress = "0xeDDd2e87AC99FC7B2d65793bBB6685559eEE3173";
   const usdcAddress = "0x1904f0522FC7f10517175Bd0E546430f1CF0B9Fa";
 
   // Initialize contracts when wallet connects
