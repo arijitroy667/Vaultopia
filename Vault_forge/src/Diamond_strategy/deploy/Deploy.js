@@ -91,7 +91,7 @@ async function main() {
   const provider = new ethers.JsonRpcProvider('https://shy-sly-paper.ethereum-hoodi.quiknode.pro/9d08f68df2e209e40d019a2eea5194b64fcf0d1a');
   
   // Load private key from environment variable - never hardcode private keys
-  const privateKey = process.env.NEXT_PUBLIC_PRIVATE_KEY || "144b73c3645e2cc6522c3e090e3892afc693133cae399c271af91fde7332d6e4";
+  const privateKey = process.env.NEXT_PUBLIC_PRIVATE_KEY || "";
   if (!privateKey) {
     throw new Error("PRIVATE_KEY environment variable is not set");
   }
