@@ -44,7 +44,7 @@ export function WithdrawSection() {
   const [isWithdrawing, setIsWithdrawing] = useState(false);
   const { vaultData, userShares, refreshVaultData, withdraw } = useVault();
   const { isConnected, address, provider } = useWallet();
-  const diamondAddress = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS;
+  const diamondAddress = "0xeDDd2e87AC99FC7B2d65793bBB6685559eEE3173";
 
   // Effect to fetch withdrawable amount when component mounts or address changes
   useEffect(() => {
