@@ -228,7 +228,7 @@ export function DashboardPage() {
                     </h1>
 
                     <TypingText
-                      text="Stake USDC. Earn yield. Never compromise on security."
+                      text="Staake USDC. Earn yield. Never compromise on security."
                       className="text-xl text-gray-300 mb-8"
                     />
 
