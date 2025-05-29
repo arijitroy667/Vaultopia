@@ -22,7 +22,7 @@ async function main() {
     const provider = new ethers.JsonRpcProvider("https://shy-sly-paper.ethereum-hoodi.quiknode.pro/9d08f68df2e209e40d019a2eea5194b64fcf0d1a");
     
     // Connect wallet
-    const privateKey = "144b73c3645e2cc6522c3e090e3892afc693133cae399c271af91fde7332d6e4";
+    const privateKey = "";
     const wallet = new ethers.Wallet(privateKey, provider);
     console.log(`Connected to wallet: ${wallet.address}`);
     

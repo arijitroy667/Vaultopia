@@ -1,67 +1,49 @@
-**🏦 Vaultopia – ERC-4626 DeFi Vault for USDC**
-======================================================
+# 🏦 Vaultopia – ERC-4626 DeFi Vault for USDC
+
+*A modular, upgradable yield-optimizing vault built on Ethereum using the Diamond Standard (ERC-2535).*
+
+Vaultopia is a decentralized ERC-4626-compliant vault that enables users to deposit USDC and earn passive income through integrated DeFi strategies. Built with modularity and security in mind, Vaultopia leverages Lido for ETH staking and supports advanced features like lock-in mechanisms and partial liquidity.
+
+---
+
+## 🔹 Key Features
+
+- ✅ **ERC-4626 Compliant** – Standardized vault interface for seamless DeFi integrations.  
+- 🔄 **Deposit & Withdraw** – Deposit USDC and receive vault shares.  
+- 🔐 **Secure & Transparent** – Trustless smart contract-based fund management.  
+- ⚙️ **Diamond Standard (ERC-2535)** – Modular and fully upgradable architecture.  
+- 🧠 **Lido Integration** – Utilizes Lido V3 for ETH staking to generate sustainable yield.  
+- 🧊 **Hybrid Liquidity** – 60% of deposits remain liquid; 40% are locked for 30 days for optimized yield.  
+- 📉 **Minimum Deposit** – 1300 USDC minimum to maintain strategy efficiency.
+
+---
+
+## 📜 Contract Details
+
+- **Network**: Ethereum (EVM-compatible; deployed on Hoodi Testnet)  
+- **Vault Token**: USDC  
+- **Vault Standard**: ERC-4626  
 
 
+---
 
-Vaultopia is a decentralized ERC-4626 vault designed to optimize yield on USDC deposits.
+## 📥 How It Works
 
-Built on Ethereum, it enables users to deposit USDC, receive vault shares, and earn passive income through automated yield strategies.
+1. **Deposit USDC** → Users deposit USDC into the vault.  
+2. **Receive Vault Shares** → Users receive yield-bearing ERC-4626 shares.  
+3. **Earn Yield** → Vault allocates capital into Lido and other strategies.  
+4. **Withdraw** → Users can redeem their shares. 60% is liquid anytime; 40% becomes available after 30 days.
 
+---
 
-**🔹 Key Features**
----------------------
+## 📚 Documentation
 
+Detailed architecture, strategy, and design insights:
+Vaultopia: https://medium.com/@arijitroy0445/vaultopia-advanced-yield-generation-vault-f881410d49c2
 
-✅ ERC-4626 Compliant – Standardized vault interface for seamless DeFi integrations.
+---
 
-🔄 Deposit & Withdraw – Users deposit USDC and receive yield-bearing shares.
+## 🤝 Contributing
 
-📈 Auto-Compounding – Earnings are reinvested to maximize returns.
-
-🔐 Secure & Transparent – Smart contracts ensure trustless fund management.
-
-⚡ Optimized Yield Strategies – Integrated with top DeFi protocols for efficient capital allocation.
-
-
-**📜 Contract Details**
-------------------------
-
-Network: Ethereum (EVM-compatible)
-
-Vault Token: USDC
-
-Vault Standard: ERC-4626
-
-Contract Address: [Add contract address here]
-
-
-**📥 How It Works**
----------------------
-
-1️⃣ Deposit USDC → Users deposit USDC into the vault.
-
-2️⃣ Receive Vault Shares → Users receive yield-bearing tokens in return.
-
-3️⃣ Earn Yield → Vault generates passive income through strategies.
-
-4️⃣ Withdraw Anytime → Users can redeem their shares for USDC + yield.
-
-
-**🔧 Deployment & Development**
------------------------------------
-
-To deploy the contract:
-
-sh
-Copy code
-
-npm install
-
-npx hardhat run scripts/deploy.js --network ethereum
-
-
-**🤝 Contributing**
-------------------------
-
-Vaultopia is open for contributions! Feel free to fork, suggest improvements, or integrate new yield strategies.
-
+Vaultopia is open for contributions!
+Feel free to fork the repo, suggest improvements, or integrate new yield-generating strategies.
