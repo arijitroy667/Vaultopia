@@ -81,19 +81,26 @@ export function WithdrawSection() {
       );
 
       // Get all relevant withdrawal data
-      const [
-        actualWithdrawable,
-        theoreticalWithdrawable,
-        locked,
-        deposits,
-        liquidUsed,
-      ] = await Promise.all([
-        diamondContract.maxWithdraw(address),
-        diamondContract.getWithdrawableAmount(address),
-        diamondContract.getLockedAmount(address),
-        diamondContract.userDeposits(address),
-        diamondContract.usedLiquidPortion(address),
-      ]);
+      const [actualWithdrawable, theoreticalWithdrawable, locked, liquidUsed] =
+        await Promise.all([
+          diamondContract.maxWithdraw(address),
+          diamondContract.getWithdrawableAmount(address),
+          diamondContract.getLockedAmount(address),
+          diamondContract.usedLiquidPortion(address),
+        ]);
+
+      let deposits = 0;
+      try {
+        // Try to calculate from other available data
+        const totalUserBalance = await diamondContract.convertToAssets(
+          await diamondContract.balanceOf(address)
+        );
+        // Use the total balance as a fallback estimate
+        deposits = totalUserBalance;
+        console.log("Using estimated deposits value:", deposits);
+      } catch (error) {
+        console.warn("Could not fetch or estimate user deposits:", error);
+      }
 
       // Set state with formatted values
       setWithdrawableAmount(ethers.formatUnits(actualWithdrawable, 6));

@@ -158,6 +158,8 @@ function debounce<T>(func: (...args: any[]) => Promise<T>, wait: number) {
 const VaultContext = createContext<VaultContextType | undefined>(undefined);
 
 export function VaultProvider({ children }: { children: ReactNode }) {
+  const STORAGE_KEY_TRANSACTIONS = "vaultopia_transactions";
+  const MAX_STORED_TRANSACTIONS = 100;
   const { isConnected, address, provider, signer } = useWallet();
   const [userShares, setUserShares] = useState(0);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -207,6 +209,42 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     }, 20000),
     []
   ); // 20 sec debounce
+
+  const saveTransactionsToLocalStorage = useCallback((txs: Transaction[]) => {
+    try {
+      // Limit the number of transactions saved to avoid localStorage limits
+      const limitedTxs = txs.slice(0, MAX_STORED_TRANSACTIONS);
+      localStorage.setItem(
+        STORAGE_KEY_TRANSACTIONS,
+        JSON.stringify(limitedTxs)
+      );
+    } catch (error) {
+      console.warn("Failed to save transactions to localStorage:", error);
+    }
+  }, []);
+
+  const updateTransactions = useCallback(
+    (txs: Transaction[]) => {
+      setTransactions(txs);
+      saveTransactionsToLocalStorage(txs);
+    },
+    [saveTransactionsToLocalStorage]
+  );
+
+  const generateTxId = () => {
+    return Date.now().toString() + Math.random().toString(36).substring(2, 15);
+  };
+
+  useEffect(() => {
+    try {
+      const savedTransactions = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
+      if (savedTransactions) {
+        setTransactions(JSON.parse(savedTransactions));
+      }
+    } catch (error) {
+      console.warn("Failed to load transactions from localStorage:", error);
+    }
+  }, []);
 
   const loadTransactionHistory = async () => {
     if (!isConnected || !address || !diamondContract || !provider) return;
@@ -267,15 +305,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
             `Error querying events from ${fromBlock} to ${toBlock}:`,
             error
           );
-          // If there's an error, try a smaller range
-          const reducedRange = Math.floor(MAX_BLOCK_RANGE / 2);
-          if (reducedRange < 1000) {
-            // If we've reduced too much, give up on this chunk and move on
-            fromBlock = toBlock + 1;
-          } else {
-            // Try again with smaller range
-            fromBlock = Math.min(fromBlock + reducedRange, currentBlock);
-          }
+          // If there's an error, try a smaller range or move on
+          fromBlock = toBlock + 1;
         }
       }
 
@@ -286,11 +317,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           const typedEvent = event as ethers.EventLog;
           return {
             type: "deposit",
-            amount: Number(ethers.formatUnits(typedEvent.args.assets, 6)), // USDC has 6 decimals
-            shares: Number(ethers.formatUnits(typedEvent.args.shares, 18)), // Shares have 18 decimals
+            amount: Number(ethers.formatUnits(typedEvent.args.assets, 6)),
+            shares: Number(ethers.formatUnits(typedEvent.args.shares, 18)),
             timestamp: block?.timestamp ? block.timestamp * 1000 : Date.now(),
             status: "completed",
             txHash: event.transactionHash,
+            id: event.transactionHash, // Add a unique ID for deduplication
           } as Transaction;
         })
       );
@@ -307,22 +339,44 @@ export function VaultProvider({ children }: { children: ReactNode }) {
             timestamp: block?.timestamp ? block.timestamp * 1000 : Date.now(),
             status: "completed",
             txHash: event.transactionHash,
+            id: event.transactionHash, // Add a unique ID for deduplication
           } as Transaction;
         })
       );
 
-      // Combine and sort all transactions by timestamp (newest first)
-      const allTransactions = [
+      // Combine on-chain transactions
+      const onChainTransactions = [
         ...depositTransactions,
         ...withdrawTransactions,
+      ];
+
+      // Get existing transactions from state
+      const existingTransactions = [...transactions];
+
+      // Create a map of transaction hashes for deduplication
+      const txHashSet = new Set(onChainTransactions.map((tx) => tx.txHash));
+
+      // Keep pending transactions that aren't yet on-chain
+      const pendingTransactions = existingTransactions.filter(
+        (tx) => tx.status === "pending" && !txHashSet.has(tx.txHash)
+      );
+
+      // Failed transactions worth keeping
+      const failedTransactions = existingTransactions.filter(
+        (tx) =>
+          tx.status === "failed" &&
+          Date.now() - tx.timestamp < 24 * 60 * 60 * 1000 // Keep failed txs for 24h
+      );
+
+      // Combine and sort all transactions by timestamp (newest first)
+      const mergedTransactions = [
+        ...pendingTransactions,
+        ...failedTransactions,
+        ...onChainTransactions,
       ].sort((a, b) => b.timestamp - a.timestamp);
 
-      // Update transactions state with historical data
-      setTransactions((prev) => {
-        // Keep any pending transactions that might not be on-chain yet
-        const pendingTx = prev.filter((tx) => tx.status === "pending");
-        return [...pendingTx, ...allTransactions];
-      });
+      // Update transactions state with merged data
+      updateTransactions(mergedTransactions);
     } catch (error) {
       console.error("Error loading transaction history:", error);
     } finally {
@@ -829,23 +883,51 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         console.log("✅ USDC approved successfully");
       }
 
-      // STEP 4: Execute the deposit using simplifiedDeposit instead of deposit
-      toast.loading("Processing deposit transaction...", {
-        id: pendingToast,
-      });
+      // Create pendingTx object BEFORE sending the transaction
+      const pendingTx: Transaction = {
+        type: "deposit",
+        amount,
+        shares: 0, // We'll update this after calculating expected shares
+        timestamp: Date.now(),
+        status: "pending",
+        id: generateTxId(),
+      };
 
-      // Use simplifiedDeposit instead of deposit
+      // STEP 4: Execute the deposit
+      toast.loading("Processing deposit transaction...", { id: pendingToast });
+
+      // Use deposit function
       const tx = await diamondContract.deposit(amountWei, address, {
         gasLimit: BigInt(5000000), // Safe gas limit for deposit
       });
 
       console.log("Deposit transaction sent:", tx.hash);
+
+      // Update pending transaction with hash
+      pendingTx.txHash = tx.hash;
+
+      // Add to transactions list
+      updateTransactions([pendingTx, ...transactions]);
+
       const receipt = await tx.wait(1);
       console.log("Deposit confirmed:", receipt.hash);
 
       // Calculate shares received
       const expectedShares = await diamondContract.previewDeposit(amountWei);
       const sharesReceived = Number(ethers.formatUnits(expectedShares, 18));
+
+      // Update transaction with completed status and share amount
+      const completedTx: Transaction = {
+        ...pendingTx,
+        status: "completed",
+        shares: sharesReceived,
+        blockNumber: receipt.blockNumber,
+      };
+
+      updateTransactions([
+        completedTx,
+        ...transactions.filter((tx) => tx !== pendingTx),
+      ]);
 
       // Show success and return result
       toast.success("Deposit successful", {
@@ -977,8 +1059,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         shares: Number(ethers.formatUnits(sharesToBurn, 18)),
         timestamp: Date.now(),
         status: "pending",
+        id: generateTxId(),
       };
-      setTransactions((prev) => [pendingTx, ...prev]);
+      updateTransactions([pendingTx, ...transactions]);
 
       // Get fee data for gas optimization
       if (!provider) {
@@ -1008,9 +1091,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         txHash: receipt.hash,
         blockNumber: receipt.blockNumber,
       };
-      setTransactions((prev) => [
+      updateTransactions([
         completedTx,
-        ...prev.filter((tx) => tx !== pendingTx),
+        ...transactions.filter((tx) => tx !== pendingTx),
       ]);
 
       // Refresh vault data
@@ -1027,8 +1110,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       console.error("Withdrawal failed:", error);
 
       // Update failed transaction
-      setTransactions((prev) =>
-        prev.map((tx) =>
+      updateTransactions(
+        transactions.map((tx) =>
           tx.status === "pending" &&
           tx.type === "withdraw" &&
           tx.amount === amount
